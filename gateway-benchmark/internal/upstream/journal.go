@@ -10,22 +10,27 @@ import (
 // here, parameter fidelity is checked here, and token accounting is compared
 // against the deterministic usage the upstream reported.
 type Entry struct {
-	Seq         int               `json:"seq"`
-	At          time.Time         `json:"at"`
-	Profile     string            `json:"profile"`
-	Path        string            `json:"path"`
-	Model       string            `json:"model"`
-	Stream      bool              `json:"stream"`
-	ClientTag   string            `json:"client_tag"`
-	AuthPresent bool              `json:"auth_present"`
-	AuthFP      string            `json:"auth_fingerprint"`
-	BodySHA     string            `json:"body_sha256"`
-	Params      map[string]any    `json:"params"`
-	Headers     map[string]string `json:"headers"`
-	Outcome     string            `json:"outcome"`
-	Status      int               `json:"status"`
-	PromptToks  int               `json:"prompt_tokens"`
-	OutputToks  int               `json:"output_tokens"`
+	Seq         int            `json:"seq"`
+	At          time.Time      `json:"at"`
+	Profile     string         `json:"profile"`
+	Path        string         `json:"path"`
+	Model       string         `json:"model"`
+	Stream      bool           `json:"stream"`
+	ClientTag   string         `json:"client_tag"`
+	AuthPresent bool           `json:"auth_present"`
+	AuthFP      string         `json:"auth_fingerprint"`
+	BodySHA     string         `json:"body_sha256"`
+	Params      map[string]any `json:"params"`
+	// BodyKeys lists the top-level JSON keys the request actually carried.
+	// Params only reports fields the mock knows how to parse, so without this a
+	// gateway that renames or adds a field is indistinguishable from one that
+	// dropped it. Keys only, never values: the journal is written to results/.
+	BodyKeys   []string          `json:"body_keys"`
+	Headers    map[string]string `json:"headers"`
+	Outcome    string            `json:"outcome"`
+	Status     int               `json:"status"`
+	PromptToks int               `json:"prompt_tokens"`
+	OutputToks int               `json:"output_tokens"`
 }
 
 // Journal is an append-only, concurrency-safe record of upstream requests.

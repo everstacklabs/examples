@@ -1,0 +1,6 @@
+# Bifrost v2 seeds a SQLite config store from config.json on first boot and
+# writes its databases and logs back into this mounted directory. Only the
+# committed config.json belongs in git.
+*
+!.gitignore
+!config.json

@@ -29,6 +29,11 @@ load:
   concurrency_steps: [1, 10, 50, 200]
   saturation_rps_steps: [50, 100, 200, 400, 800, 1600]
   timeout_seconds: 30
+  # The timeout scenarios (C4, C11) must out-wait the gateways rather than race
+  # them. Every compose config here sets a 30s request timeout, so a probe that
+  # also gives up at 30s would report all of them as broken. Raise this if you
+  # benchmark a gateway configured with a longer timeout.
+  timeout_patience_seconds: 75
   prompt_chars: 400
 
 targets:
@@ -59,7 +64,7 @@ targets:
     api_key_env: EVERSTACK_BENCH_KEY
     secondary_key_env: EVERSTACK_BENCH_KEY_TENANT_B
     container: gwbench-everstack
-    config_ref: benchmarks/gateway/compose/everstack/gateway.yaml
+    config_ref: compose/everstack/gateway.yaml
 
   # ---------------------------------------------------------------------------
   # Tier 1 competitors: self-hostable, so they can point at the same mock and
@@ -76,40 +81,60 @@ targets:
     model: bench-model
     fallback_model: bench-model-fallback
     api_key_env: LITELLM_BENCH_KEY
+    # Must match LITELLM_MASTER_KEY in compose and master_key in its config.
+    # LiteLLM rejects anything else with a 401 before the request is proxied.
+    default_key: sk-bench-master
     container: gwbench-litellm
-    config_ref: benchmarks/gateway/compose/litellm/config.yaml
+    config_ref: compose/litellm/config.yaml
 
   - name: bifrost
     chat_url: http://localhost:8081/v1/chat/completions
     models_url: http://localhost:8081/v1/models
     model: bench-model
     api_key_env: BIFROST_BENCH_KEY
+    default_key: bench-key
     container: gwbench-bifrost
-    config_ref: benchmarks/gateway/compose/bifrost/config.json
+    config_ref: compose/bifrost/config.json
     supports:
       # Scored in the matrix from documentation rather than probed, until the
       # container config is validated.
       C6: false
 
   - name: helicone
-    chat_url: http://localhost:8082/v1/chat/completions
-    model: bench-model
+    # Not /v1/chat/completions: this gateway serves its OpenAI-compatible
+    # surface at /ai/chat/completions.
+    chat_url: http://localhost:8082/ai/chat/completions
+    # Model names must be {provider}/{model}; a bare name is rejected by its
+    # mapper before any request is proxied.
+    model: openai/bench-model
     api_key_env: HELICONE_BENCH_KEY
+    default_key: bench-key
     container: gwbench-helicone
-    config_ref: benchmarks/gateway/compose/helicone/config.yaml
+    config_ref: compose/helicone/config.yaml
+    # The published image is amd64-only, so on Apple Silicon this target runs
+    # under emulation and its latency and CPU figures are NOT comparable to the
+    # rest of the table. The report prints this warning next to its rows.
+    emulated_on_arm64: true
     supports:
       C6: false
+      # No failover destination: its base-url handling cannot address the
+      # mock's secondary profile (see compose/helicone/config.yaml).
+      C1: false
 
   - name: portkey
     chat_url: http://localhost:8787/v1/chat/completions
     model: bench-model
     api_key_env: PORTKEY_BENCH_KEY
     container: gwbench-portkey
-    config_ref: benchmarks/gateway/compose/portkey/config.json
+    config_ref: compose/portkey/config.json
     # The OSS Portkey gateway is told its upstream per request via headers
     # rather than a server-side config file.
     headers:
       x-portkey-provider: openai
-      x-portkey-custom-host: http://upstream:9800/p/primary
+      # The /v1 suffix is required: this gateway appends /chat/completions to
+      # the custom host, so omitting it produces a 404 that is forwarded back
+      # to the client as though the upstream rejected the request.
+      x-portkey-custom-host: http://upstream:9800/p/primary/v1
+    default_key: bench-key
     supports:
       C6: false

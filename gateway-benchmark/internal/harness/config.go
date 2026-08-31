@@ -45,17 +45,26 @@ type Target struct {
 	FallbackModel string `yaml:"fallback_model"`
 	// SecondaryKeyEnv holds a second credential used by the tenant-isolation
 	// scenario. Empty means that scenario is skipped for this target.
-	SecondaryKeyEnv string            `yaml:"secondary_key_env"`
-	APIKeyEnv       string            `yaml:"api_key_env"`
-	Headers         map[string]string `yaml:"headers"`
+	SecondaryKeyEnv string `yaml:"secondary_key_env"`
+	APIKeyEnv       string `yaml:"api_key_env"`
+	// DefaultKey is used when APIKeyEnv is unset. Gateways differ in what an
+	// unconfigured deployment accepts (LiteLLM wants its master key, the mock
+	// accepts anything), so the fallback belongs to the target, not the harness.
+	DefaultKey string            `yaml:"default_key"`
+	Headers    map[string]string `yaml:"headers"`
 
 	// Container is the docker container name, used for CPU and RSS sampling.
-	Container  string `yaml:"container"`
-	Version    string `yaml:"version"`
-	Image      string `yaml:"image"`
-	ConfigRef  string `yaml:"config_ref"`
-	Skip       bool   `yaml:"skip"`
-	SkipReason string `yaml:"skip_reason"`
+	Container string `yaml:"container"`
+	// EmulatedOnARM64 marks a target whose image ships amd64-only, so on Apple
+	// Silicon it runs under emulation. Its latency and CPU figures are then not
+	// comparable to natively-running targets, and the report says so rather
+	// than letting the rows be read side by side.
+	EmulatedOnARM64 bool   `yaml:"emulated_on_arm64"`
+	Version         string `yaml:"version"`
+	Image           string `yaml:"image"`
+	ConfigRef       string `yaml:"config_ref"`
+	Skip            bool   `yaml:"skip"`
+	SkipReason      string `yaml:"skip_reason"`
 
 	// Supports lets a target opt out of scenarios it genuinely cannot serve, so
 	// the report distinguishes "does not have the feature" from "failed the test".
@@ -65,11 +74,11 @@ type Target struct {
 // APIKey resolves the credential from the environment. Keys are never written
 // into targets.yaml, which gets forked and pasted into issues.
 func (t Target) APIKey() string {
-	if t.APIKeyEnv == "" {
-		return "bench-key"
-	}
-	if v := os.Getenv(t.APIKeyEnv); v != "" {
+	if v := os.Getenv(t.APIKeyEnv); t.APIKeyEnv != "" && v != "" {
 		return v
+	}
+	if t.DefaultKey != "" {
+		return t.DefaultKey
 	}
 	return "bench-key"
 }
@@ -105,7 +114,12 @@ type LoadDefaults struct {
 	ConcurrencySteps []int     `yaml:"concurrency_steps"`
 	SaturationSteps  []float64 `yaml:"saturation_rps_steps"`
 	TimeoutSeconds   int       `yaml:"timeout_seconds"`
-	PromptChars      int       `yaml:"prompt_chars"`
+	// TimeoutPatienceSeconds is how long the two timeout scenarios wait before
+	// concluding a gateway will never give up. It must exceed the request
+	// timeouts the gateways are configured with, or the probe's own deadline
+	// becomes the thing being measured.
+	TimeoutPatienceSeconds int `yaml:"timeout_patience_seconds"`
+	PromptChars            int `yaml:"prompt_chars"`
 }
 
 func (l LoadDefaults) Warmup() time.Duration   { return time.Duration(l.WarmupSeconds) * time.Second }
@@ -144,6 +158,9 @@ func (s *Suite) applyDefaults() {
 	}
 	if s.Load.TimeoutSeconds == 0 {
 		s.Load.TimeoutSeconds = 30
+	}
+	if s.Load.TimeoutPatienceSeconds == 0 {
+		s.Load.TimeoutPatienceSeconds = 75
 	}
 	if s.Load.PromptChars == 0 {
 		s.Load.PromptChars = 400

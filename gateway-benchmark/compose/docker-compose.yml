@@ -48,10 +48,16 @@ services:
   # (internal/api/api.go:571).
   # ---------------------------------------------------------------------------
   everstack:
-    # No default: Everstack's image is in a private registry, so there is no tag
-    # that would work for someone who just cloned this repo. Set EVERSTACK_IMAGE
-    # to an image you can pull or one you built locally. See the README.
-    image: ${EVERSTACK_IMAGE:?set EVERSTACK_IMAGE to an Everstack image you can pull}
+    # Everstack's image is in a private registry, so there is no tag that would
+    # work for someone who just cloned this repo. Set EVERSTACK_IMAGE to an
+    # image you can pull or one you built locally. See the README.
+    #
+    # This is a placeholder default rather than `${EVERSTACK_IMAGE:?...}` on
+    # purpose: Compose interpolates the whole file before it applies profiles,
+    # so a required-variable marker here makes `docker compose up` fail even
+    # when the subject profile is not selected. That would break the one case
+    # the profile exists to protect, a fresh clone with no credentials.
+    image: ${EVERSTACK_IMAGE:-everstack-image-not-set-see-readme}
     container_name: gwbench-everstack
     # Behind a profile so `docker compose up` brings up the mock upstream and
     # every public competitor without needing credentials at all. The subject is
@@ -107,7 +113,7 @@ services:
   # would be a rigged comparison.
   # ---------------------------------------------------------------------------
   litellm:
-    image: ghcr.io/berriai/litellm:main-v1.63.0-stable
+    image: ghcr.io/berriai/litellm:main-v1.83.14-stable
     container_name: gwbench-litellm
     depends_on:
       - upstream
@@ -126,24 +132,41 @@ services:
   # overhead comparison and the most useful one to publish.
   # ---------------------------------------------------------------------------
   bifrost:
-    image: maximhq/bifrost:v1.1.15
+    # v2.0.0 is the current release. Benchmarking a year-old build of the
+    # gateway that markets itself on speed would be the rigged kind of unfair.
+    image: maximhq/bifrost:v2.0.0
     container_name: gwbench-bifrost
     depends_on:
       - upstream
     ports:
       - "8081:8080"
     volumes:
-      - ./bifrost:/app/config
+      # Bifrost v2 reads its config from $APP_DIR, which defaults to /app/data,
+      # not /app/config. Mounting the wrong path fails open: the gateway starts
+      # healthy and then 400s every request with "could not auto resolve a
+      # provider", which looks like a bad request rather than a missing config.
+      - ./bifrost:/app/data
     environment:
       - APP_PORT=8080
       - OPENAI_API_KEY=bench-upstream-key
-      - LOG_LEVEL=error
+      - LOG_LEVEL=debug
 
   # ---------------------------------------------------------------------------
   # Helicone AI Gateway. Rust router with observability-adjacent positioning.
   # ---------------------------------------------------------------------------
   helicone:
-    image: helicone/ai-gateway:v0.2.0
+    # This project publishes no version tags at all: Docker Hub carries only
+    # `latest`, `main`, and per-commit shas. Pinned to the sha that `latest`
+    # pointed at, since an unpinned tag makes a result unreproducible. That
+    # image was last updated 2025-07-30, checked 2026-08-31.
+    image: helicone/ai-gateway:sha-42d2998
+    # amd64-only: the image has no arm64 manifest, so on Apple Silicon this runs
+    # under emulation. THAT MAKES ITS LATENCY AND CPU NUMBERS NOT COMPARABLE to
+    # the natively-running targets, often by several times. targets.yaml marks
+    # this target `emulated_on_arm64: true` so the report says so rather than
+    # letting a reader compare the rows naively. On an amd64 host the flag is
+    # harmless and the numbers are directly comparable.
+    platform: linux/amd64
     container_name: gwbench-helicone
     depends_on:
       - upstream
@@ -151,10 +174,14 @@ services:
       - "8082:8080"
     volumes:
       - ./helicone/config.yaml:/etc/helicone/config.yaml:ro
+    # The config path is a CLI flag, not an env var. Setting CONFIG_FILE alone
+    # is silently ignored: the gateway starts fine and then routes to the real
+    # provider instead of the mock, which looks like a credential problem rather
+    # than a config one.
+    command: ["/usr/local/bin/ai-gateway", "-c", "/etc/helicone/config.yaml"]
     environment:
-      - CONFIG_FILE=/etc/helicone/config.yaml
       - OPENAI_API_KEY=bench-upstream-key
-      - RUST_LOG=error
+      - RUST_LOG=info
 
   # ---------------------------------------------------------------------------
   # Portkey Gateway (the OSS core of the closest commercial competitor).
@@ -163,7 +190,7 @@ services:
   # than a server-side config file, so its upstream is set in targets.yaml.
   # ---------------------------------------------------------------------------
   portkey:
-    image: portkeyai/gateway:1.9.4
+    image: portkeyai/gateway:1.15.2
     container_name: gwbench-portkey
     depends_on:
       - upstream

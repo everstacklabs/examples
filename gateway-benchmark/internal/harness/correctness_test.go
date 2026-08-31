@@ -23,7 +23,7 @@ func runAgainstBarePassthrough(t *testing.T) map[string]Check {
 
 	suite := &Suite{
 		Upstream: UpstreamRef{BaseURL: ts.URL, ControlURL: ts.URL},
-		Load:     LoadDefaults{TimeoutSeconds: 3},
+		Load:     LoadDefaults{TimeoutSeconds: 3, TimeoutPatienceSeconds: 4},
 	}
 	target := Target{
 		Name:    "passthrough",

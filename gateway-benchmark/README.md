@@ -27,6 +27,10 @@ everything yourself.
 - Docker with Compose v2 (only for the competitor gateways; the harness and mock
   upstream run without it)
 
+On Apple Silicon, note that Helicone's image is amd64-only and runs under
+emulation. Its latency and CPU figures are **not comparable** to the natively
+running targets; the harness marks it and the report says so.
+
 ## Quick start
 
 ```sh
@@ -166,11 +170,21 @@ are proven non-vacuous by tests: C7 flips from `not configured` to `pass` when a
 real caching proxy is put in front of the upstream, and C1 reports `fail` when a
 fallback is claimed but not delivered.
 
-**Not yet run-verified** - every gateway config under `compose/`, **including
-Everstack's own**. All of them were written from documented schemas and struct
-definitions, not from a container that started and served a request. Expect the
-first `make up` to need a round of iteration on provider name strings and
-container entrypoints. `make validate` is the tool for exactly that.
+**Container-verified** (2026-08-31, Docker 29.4 / OrbStack, Apple Silicon) - the
+LiteLLM, Bifrost, Helicone, and Portkey configs under `compose/`. All four start,
+proxy to the mock, and pass `make validate`. Getting there took a fix per
+gateway, each recorded as a comment next to the setting it explains:
+
+| Gateway | What was wrong |
+| --- | --- |
+| LiteLLM | pinned tag did not exist; harness key default did not match the configured master key |
+| Bifrost | config mounted at the wrong path; SSRF guard blocks private IPs; base URL double-prefixed `/v1` |
+| Helicone | config path is a CLI flag, not an env var; `load-balance` takes `providers` not `targets`; model names must be `{provider}/{model}`; serves `/ai/chat/completions`; drops path segments from a base URL |
+| Portkey | custom host needs the `/v1` suffix or its 404 is forwarded as if the upstream rejected the request |
+
+**Still not run-verified** - the **Everstack** target. Its image is private, so
+the subject under test is the one config here that has never started. `make
+validate` reports it as failing and a run lists it as unmeasured.
 
 **Documented, not verified** - the `source: docs` cells in the capability
 matrix. Their evidence URLs resolve, but the claims come from published vendor

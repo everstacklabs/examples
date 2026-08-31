@@ -117,10 +117,23 @@ func writeEnvironment(s *strings.Builder, b *Bundle) {
 		fmt.Fprintf(s, "**Hardware**: %s\n\n", b.Hardware)
 	}
 	s.WriteString("| Target | Image | Version |\n|---|---|---|\n")
+	var emulated []string
 	for _, p := range b.Perf {
-		fmt.Fprintf(s, "| %s | `%s` | %s |\n", p.Target, orDash(p.Image), orDash(p.Version))
+		name := p.Target
+		if p.Emulated {
+			name += " (emulated)"
+			emulated = append(emulated, p.Target)
+		}
+		fmt.Fprintf(s, "| %s | `%s` | %s |\n", name, orDash(p.Image), orDash(p.Version))
 	}
 	s.WriteString("\n")
+	if len(emulated) > 0 {
+		fmt.Fprintf(s, "> **Not comparable: %s.** These images ship for a different CPU architecture "+
+			"than the host and ran under emulation, which commonly costs several times the native latency and CPU. "+
+			"Their rows are reported for completeness, not for ranking against the natively-running targets. "+
+			"Re-run on a matching architecture before drawing any conclusion about them.\n\n",
+			strings.Join(emulated, ", "))
+	}
 	if b.Notes != "" {
 		fmt.Fprintf(s, "%s\n\n", b.Notes)
 	}

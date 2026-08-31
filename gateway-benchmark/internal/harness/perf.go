@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -42,9 +43,12 @@ type PhaseResult struct {
 
 // PerfReport is every phase measured for one target.
 type PerfReport struct {
-	Target      string        `json:"target"`
-	Image       string        `json:"image"`
-	Version     string        `json:"version"`
+	Target  string `json:"target"`
+	Image   string `json:"image"`
+	Version string `json:"version"`
+	// Emulated marks a target that ran under CPU emulation, whose latency and
+	// resource figures are therefore not comparable to the others.
+	Emulated    bool          `json:"emulated"`
 	Unary       []PhaseResult `json:"unary_runs"`
 	Streaming   []PhaseResult `json:"streaming_runs"`
 	Concurrency []PhaseResult `json:"concurrency_sweep"`
@@ -55,9 +59,10 @@ type PerfReport struct {
 // RunPerf executes the performance suite (P1 to P7) against a single target.
 func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log func(string, ...any)) (*PerfReport, error) {
 	rep := &PerfReport{
-		Target:  t.Name,
-		Version: t.Version,
-		Image:   t.Image,
+		Target:   t.Name,
+		Version:  t.Version,
+		Image:    t.Image,
+		Emulated: t.EmulatedOnARM64 && runtime.GOARCH == "arm64",
 	}
 	if img := ContainerImage(ctx, t.Container); img != "" {
 		rep.Image = img

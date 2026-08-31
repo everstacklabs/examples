@@ -47,9 +47,25 @@ type Check struct {
 
 func f64(v float64) *float64 { return &v }
 
+// timeoutPatience is how long the timeout scenarios wait before concluding the
+// gateway will never give up. It must comfortably exceed the request timeouts
+// the gateways under test are configured with (30s in this suite's compose
+// files), or the probe's own deadline becomes the thing being measured.
+func timeoutPatience(suite *Suite) time.Duration {
+	if suite.Load.TimeoutPatienceSeconds > 0 {
+		return time.Duration(suite.Load.TimeoutPatienceSeconds) * time.Second
+	}
+	return 75 * time.Second
+}
+
 // RunCorrectness executes the behavioural suite (C1 to C12) for one target.
 func RunCorrectness(ctx context.Context, suite *Suite, t Target, ctrl *Control, log func(string, ...any)) []Check {
 	probe := NewProbe(t, suite.Load.Timeout())
+	// The two scenarios that measure who gives up first need to out-wait the
+	// gateway, not race it. With equal deadlines the client always appears to
+	// lose and every gateway looks broken, which says more about the probe than
+	// the product.
+	patient := NewProbe(t, timeoutPatience(suite))
 	var checks []Check
 
 	type step struct {
@@ -60,14 +76,14 @@ func RunCorrectness(ctx context.Context, suite *Suite, t Target, ctrl *Control, 
 		{"C1", func() Check { return checkFailover(ctx, t, ctrl, probe) }},
 		{"C2", func() Check { return checkRetryAfter(ctx, t, ctrl, probe) }},
 		{"C3", func() Check { return checkRetryAmplification(ctx, t, ctrl, probe) }},
-		{"C4", func() Check { return checkStreamingFailure(ctx, t, ctrl, probe) }},
+		{"C4", func() Check { return checkStreamingFailure(ctx, t, ctrl, patient) }},
 		{"C5", func() Check { return checkRateLimit(ctx, t, ctrl, probe) }},
 		{"C6", func() Check { return checkBudget(ctx, t, ctrl, probe) }},
 		{"C7", func() Check { return checkCache(ctx, t, ctrl, probe) }},
 		{"C8", func() Check { return checkParameterFidelity(ctx, t, ctrl, probe) }},
 		{"C9", func() Check { return checkTokenAccounting(ctx, t, ctrl, probe) }},
 		{"C10", func() Check { return checkTenantIsolation(ctx, t, ctrl, probe) }},
-		{"C11", func() Check { return checkTimeout(ctx, t, ctrl, probe) }},
+		{"C11", func() Check { return checkTimeout(ctx, t, ctrl, patient) }},
 		{"C12", func() Check { return checkObservability(t) }},
 	}
 
@@ -267,8 +283,11 @@ func checkStreamingFailure(ctx context.Context, t Target, ctrl *Control, p *Prob
 	}
 
 	switch {
-	case r.Err != "" && elapsed >= p.HTTP.Timeout:
-		return Check{Status: Fail, Detail: "the client hung until its own timeout; the gateway never closed the broken stream", Evidence: ev}
+	case r.Err != "" && elapsed >= time.Duration(float64(p.HTTP.Timeout)*0.95):
+		return Check{Status: Fail, Metric: f64(float64(r.Chunks)), Unit: "chunks",
+			Detail: fmt.Sprintf("delivered %d chunks then held the connection open for the full %s the probe waited; "+
+				"the client cannot tell a truncated stream from a slow one", r.Chunks, p.HTTP.Timeout),
+			Evidence: ev}
 	case r.Chunks >= 40:
 		return Check{Status: Pass, Metric: f64(float64(r.Chunks)), Unit: "chunks",
 			Detail: "recovered the full stream after the upstream aborted mid-response", Evidence: ev}
@@ -443,9 +462,26 @@ func checkParameterFidelity(ctx context.Context, t Target, ctrl *Control, p *Pro
 		"seed": float64(4242), "user": "bench-user-1",
 		"tools_count": float64(1), "tool_choice": "auto",
 	}
+	// A gateway may legitimately rename a field rather than drop it. OpenAI
+	// deprecated max_tokens in favour of max_completion_tokens, and Bifrost
+	// translates it; treating that as a dropped parameter would be a false
+	// accusation, which is worse than not running the check at all.
+	aliases := map[string][]string{
+		"max_tokens": {"max_completion_tokens"},
+	}
+
 	var missing, wrong []string
 	for k, expect := range want {
 		actual, ok := got[k]
+		if !ok {
+			for _, alt := range aliases[k] {
+				if v, found := got[alt]; found {
+					actual, ok = v, true
+					k = k + " (as " + alt + ")"
+					break
+				}
+			}
+		}
 		if !ok {
 			missing = append(missing, k)
 			continue
@@ -578,7 +614,9 @@ func checkTimeout(ctx context.Context, t Target, ctrl *Control, p *Probe) Check 
 	// A 5% margin distinguishes "the gateway gave up" from "the client did".
 	if r.Err != "" && elapsed >= time.Duration(float64(clientTimeout)*0.95) {
 		return Check{Status: Fail, Metric: f64(float64(elapsed.Milliseconds())), Unit: "ms",
-			Detail:   fmt.Sprintf("the client hit its own %s timeout first; the gateway held the connection for a hung upstream", clientTimeout),
+			Detail: fmt.Sprintf("held the client connection open for the full %s the probe was willing to wait, "+
+				"against an upstream that never responded; either it enforces no request timeout of its own or its "+
+				"timeout is longer than %s", clientTimeout, clientTimeout),
 			Evidence: ev}
 	}
 	if r.Status >= 500 && r.Status < 600 {
