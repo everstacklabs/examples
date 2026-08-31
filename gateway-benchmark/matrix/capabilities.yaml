@@ -1,0 +1,446 @@
+# AI gateway capability matrix.
+#
+# Rules this file follows, enforced by `gwbench matrix`:
+#   - Every scored cell carries an evidence link and a source.
+#   - `unknown` is a legitimate value and is excluded from scoring in BOTH
+#     directions, so a competitor we have researched less does not look worse
+#     than one we researched thoroughly.
+#   - Everstack's own cells cite this repo by path, not marketing copy. Where we
+#     do not have something, the cell says `no`. A matrix where the author wins
+#     every row is not evidence.
+#
+# source values:
+#   repo    verified in Everstack's source at the cited path
+#   probe   measured by this harness in a benchmark run
+#   docs    stated in the vendor's public documentation on the verified date
+#   unknown not yet checked
+#
+# A disclosure about `source: repo`, since it only applies to one vendor:
+# Everstack's source tree is not public, so those citations are real file paths
+# that a reader outside the company cannot follow. Treat them as the weakest
+# evidence class in this file, not the strongest. The intended remedy is not to
+# be believed: run the harness. Most of what the Everstack column claims about
+# routing, caching, limits, and token accounting is probed by scenarios C1-C11
+# against any deployment, and a probe verdict overrides a repo citation.
+
+version: 1
+verified_on: "2026-08-31"
+subject: everstack
+
+vendors:
+  - id: everstack
+    name: Everstack
+    tier: self-hosted + managed
+    license: source-available (CE/EE split)
+    docs: https://everstack.ai
+    benchmarked: true
+
+  - id: litellm
+    name: LiteLLM
+    tier: self-hosted + managed
+    license: MIT (proxy features partly enterprise)
+    docs: https://docs.litellm.ai/
+    benchmarked: true
+
+  - id: portkey
+    name: Portkey
+    tier: self-hosted (OSS core) + managed
+    license: MIT gateway, commercial control plane
+    docs: https://portkey.ai/docs
+    benchmarked: true
+
+  - id: bifrost
+    name: Bifrost
+    tier: self-hosted
+    license: Apache-2.0
+    docs: https://github.com/maximhq/bifrost
+    benchmarked: true
+
+  - id: helicone
+    name: Helicone
+    tier: self-hosted + managed
+    license: Apache-2.0 gateway, commercial cloud
+    docs: https://docs.helicone.ai/
+    benchmarked: true
+
+  - id: openrouter
+    name: OpenRouter
+    tier: cloud only
+    license: proprietary
+    docs: https://openrouter.ai/docs
+    benchmarked: false
+
+  - id: cloudflare
+    name: Cloudflare AI Gateway
+    tier: cloud only
+    license: proprietary
+    docs: https://developers.cloudflare.com/ai-gateway/
+    benchmarked: false
+
+groups:
+  # ===========================================================================
+  - id: routing
+    name: Routing and reliability
+    summary: >-
+      Table stakes for anything calling itself a gateway. Scenarios C1 to C4
+      probe these live, so several cells here are marked `probe` after a run.
+    dimensions:
+      - id: multi_provider
+        name: Multi-provider routing
+        why: One integration instead of one per vendor
+        cells:
+          everstack: {score: yes, source: repo, note: "28 provider packages", evidence: "internal/providers/"}
+          litellm: {score: yes, source: docs, note: "100+ providers", evidence: "https://docs.litellm.ai/docs/providers"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/integrations/llms"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/gateway/provider-routing"}
+          openrouter: {score: yes, source: docs, evidence: "https://openrouter.ai/models"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/providers/"}
+
+      - id: fallback
+        name: Automatic failover
+        why: A provider incident stops being your outage
+        cells:
+          everstack: {score: yes, source: repo, note: "load_balancer.fallback", evidence: "cmd/config/gateway/validator/gateway.go:69"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/routing"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/fallbacks"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          openrouter: {score: yes, source: docs, evidence: "https://openrouter.ai/docs/features/provider-routing"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/configuration/fallbacks/"}
+
+      - id: load_balancing
+        name: Weighted load balancing
+        why: Spread spend and quota across keys and regions
+        cells:
+          everstack: {score: yes, source: repo, note: "weighted, per-key", evidence: "cmd/config/gateway/validator/gateway.go:60"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/routing"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/load-balancing"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          openrouter: {score: partial, source: docs, note: "provider preference, not your own keys", evidence: "https://openrouter.ai/docs/features/provider-routing"}
+          cloudflare: {score: unknown, source: unknown}
+
+      - id: bounded_retry
+        name: Bounded retry with Retry-After
+        why: "Unbounded retries amplify a provider incident instead of absorbing it (scenario C3)"
+        cells:
+          everstack: {score: unknown, source: unknown, note: "probe after first full run"}
+          litellm: {score: yes, source: docs, note: "num_retries, cooldown", evidence: "https://docs.litellm.ai/docs/routing"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/automatic-retries"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: unknown, source: unknown}
+          cloudflare: {score: unknown, source: unknown}
+
+  # ===========================================================================
+  - id: caching
+    name: Caching
+    summary: >-
+      A cache is only a feature if it is also correct. Scenario C10 checks the
+      thing nobody publishes: whether one tenant can be served another tenant's
+      cached completion.
+    dimensions:
+      - id: exact_cache
+        name: Exact-match cache
+        why: Repeated prompts stop costing money
+        cells:
+          everstack: {score: yes, source: repo, evidence: "internal/config/gateway, cache.enabled"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/caching"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/cache-simple-and-semantic"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/features/advanced-usage/caching"}
+          openrouter: {score: partial, source: docs, note: "provider prompt caching passthrough, not a gateway cache", evidence: "https://openrouter.ai/docs/features/prompt-caching"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/configuration/caching/"}
+
+      - id: semantic_cache
+        name: Semantic cache
+        why: Near-duplicate prompts hit too, not just byte-identical ones
+        cells:
+          everstack: {score: yes, source: repo, note: "gated on license + YAML", evidence: "internal/features/resolver.go:36"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/caching"}
+          portkey: {score: paid, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/cache-simple-and-semantic"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: unknown, source: unknown}
+
+      - id: cache_tenant_isolation
+        name: Cache is tenant-isolated
+        why: "A shared cache key across tenants is a data leak, not a cache (scenario C10)"
+        weight: 2
+        cells:
+          everstack: {score: unknown, source: unknown, note: "probe after first full run"}
+          litellm: {score: unknown, source: unknown}
+          portkey: {score: unknown, source: unknown}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: unknown, source: unknown}
+          cloudflare: {score: unknown, source: unknown}
+
+  # ===========================================================================
+  - id: governance
+    name: Governance and cost control
+    summary: >-
+      The difference between a proxy and something finance will sign off on.
+    dimensions:
+      - id: rate_limits
+        name: Per-key rate limits
+        why: One team's runaway loop does not starve everyone else
+        cells:
+          everstack: {score: yes, source: repo, evidence: "cmd/config/gateway/validator/gateway.go:52"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/users"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/features/advanced-usage/custom-rate-limits"}
+          openrouter: {score: partial, source: docs, note: "account-level, not per downstream key", evidence: "https://openrouter.ai/docs/api-reference/limits"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/configuration/rate-limiting/"}
+
+      - id: budgets
+        name: Hard spend budgets
+        why: "An agent loop cannot run up a five-figure bill overnight (scenario C6)"
+        weight: 2
+        cells:
+          everstack: {score: yes, source: repo, note: "credit metering and top-up", evidence: "internal/billingcredit/"}
+          litellm: {score: yes, source: docs, note: "per key, user, team", evidence: "https://docs.litellm.ai/docs/proxy/users"}
+          portkey: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: partial, source: docs, note: "prepaid credit balance, not per-key budgets", evidence: "https://openrouter.ai/docs/api-reference/limits"}
+          cloudflare: {score: unknown, source: unknown}
+
+      - id: virtual_keys
+        name: Virtual keys with provider key custody
+        why: Downstream teams never hold a provider credential
+        cells:
+          everstack: {score: yes, source: repo, evidence: "internal/auth, proto/everstack/api_key"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/virtual_keys"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/ai-gateway/virtual-keys"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: partial, source: docs, note: "their key, not yours in custody", evidence: "https://openrouter.ai/docs/api-reference/authentication"}
+          cloudflare: {score: unknown, source: unknown}
+
+      - id: audit_log
+        name: Tamper-evident audit log
+        why: Required by most security reviews above mid-market
+        cells:
+          everstack: {score: no, source: repo, note: "only sandbox egress audit exists; no general audit log", evidence: "internal/sandbox/egress/audit.go"}
+          litellm: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          portkey: {score: paid, source: docs, evidence: "https://portkey.ai/docs/product/enterprise-offering"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: unknown, source: unknown}
+          cloudflare: {score: partial, source: docs, note: "Cloudflare audit logs cover config changes", evidence: "https://developers.cloudflare.com/fundamentals/account/account-security/review-audit-logs/"}
+
+  # ===========================================================================
+  - id: observability
+    name: Observability depth
+    summary: >-
+      This is the group Everstack's positioning depends on, so it is scored
+      hardest. Scenario C12 is deliberately matrix-scored rather than probed:
+      what a gateway retains is visible only in its own UI and API, which differ
+      too much to probe uniformly over HTTP.
+    dimensions:
+      - id: prompt_capture
+        name: Full prompt and completion capture
+        why: You cannot debug an agent from latency numbers alone
+        cells:
+          everstack: {score: yes, source: repo, evidence: "proto/everstack/traces, internal/logstore"}
+          litellm: {score: partial, source: docs, note: "callbacks to an external sink; no first-party UI", evidence: "https://docs.litellm.ai/docs/proxy/logging"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/observability"}
+          bifrost: {score: partial, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/features/advanced-usage/custom-properties"}
+          openrouter: {score: partial, source: docs, note: "activity view, not a tracing product", evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/observability/logging/"}
+
+      - id: distributed_tracing
+        name: Span-level distributed tracing
+        why: Multi-step agents are a tree, not a list of calls
+        weight: 2
+        cells:
+          everstack: {score: yes, source: repo, note: "OTLP spans, span DAG, sessions", evidence: "proto/everstack/traces, internal/telemetry"}
+          litellm: {score: partial, source: docs, note: "OTel callback export to someone else's backend", evidence: "https://docs.litellm.ai/docs/observability/opentelemetry_integration"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/product/observability/traces"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: partial, source: docs, evidence: "https://docs.helicone.ai/features/sessions"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: partial, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/observability/"}
+
+      - id: otlp_ingest
+        name: Accepts OTLP from your own SDKs
+        why: The gateway is not the only thing worth tracing
+        cells:
+          everstack: {score: yes, source: repo, note: "OTLP receivers, agent trace normalisation", evidence: "internal/telemetry"}
+          litellm: {score: no, source: docs, note: "exports OTLP, does not ingest it", evidence: "https://docs.litellm.ai/docs/observability/opentelemetry_integration"}
+          portkey: {score: unknown, source: unknown}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: no, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/observability/"}
+
+      - id: evals
+        name: Evaluations and scoring in the same system
+        why: Regression testing prompts without exporting to a second vendor
+        cells:
+          everstack: {score: yes, source: repo, evidence: "proto/everstack/scores, proto/everstack/datasets"}
+          litellm: {score: no, source: docs, evidence: "https://docs.litellm.ai/"}
+          portkey: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: no, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/"}
+
+      - id: alerting
+        name: Alerting on gateway health and spend
+        why: Silent degradation is the failure mode that actually hurts
+        cells:
+          everstack: {score: yes, source: repo, evidence: "internal/alerts/, proto/everstack/alerts"}
+          litellm: {score: partial, source: docs, note: "Slack alerting on the proxy", evidence: "https://docs.litellm.ai/docs/proxy/alerting"}
+          portkey: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/features/alerts"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: partial, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/observability/"}
+
+  # ===========================================================================
+  - id: runtime
+    name: Agent runtime
+    summary: >-
+      The axis where the comparison stops being like-for-like. Most of this
+      column is not what the other products are trying to be, which is exactly
+      why a buyer needing it cannot assemble it from a proxy.
+    dimensions:
+      - id: code_sandbox
+        name: Isolated code execution
+        why: Agents that write code need somewhere safe to run it
+        cells:
+          everstack: {score: yes, source: repo, note: "firecracker microVMs", evidence: "internal/sandbox/"}
+          litellm: {score: no, source: docs, evidence: "https://docs.litellm.ai/"}
+          portkey: {score: no, source: docs, evidence: "https://portkey.ai/docs"}
+          bifrost: {score: no, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: no, source: docs, evidence: "https://docs.helicone.ai/"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: yes, source: docs, note: "separate product, not the AI Gateway", evidence: "https://developers.cloudflare.com/sandbox/"}
+
+      - id: browser
+        name: Managed browser execution
+        why: Most real customer-facing tasks end at a web UI
+        cells:
+          everstack: {score: yes, source: repo, note: "CDP pool + SearXNG", evidence: "docs/design/browser-cdp-pool-and-searxng.md"}
+          litellm: {score: no, source: docs, evidence: "https://docs.litellm.ai/"}
+          portkey: {score: no, source: docs, evidence: "https://portkey.ai/docs"}
+          bifrost: {score: no, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: no, source: docs, evidence: "https://docs.helicone.ai/"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: yes, source: docs, note: "Browser Rendering, a separate product", evidence: "https://developers.cloudflare.com/browser-rendering/"}
+
+      - id: mcp
+        name: MCP server and gateway
+        why: Tool exposure without writing an integration per client
+        cells:
+          everstack: {score: yes, source: repo, note: "inbound MCP at the gateway", evidence: "internal/mcp/"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/mcp"}
+          portkey: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/agents/model-context-protocol/"}
+
+      - id: agent_memory
+        name: Long-term agent memory
+        why: Stateful agents need recall the context window cannot hold
+        cells:
+          everstack: {score: yes, source: repo, note: "pgvector and qdrant backends", evidence: "internal/memory/"}
+          litellm: {score: no, source: docs, evidence: "https://docs.litellm.ai/"}
+          portkey: {score: no, source: docs, evidence: "https://portkey.ai/docs"}
+          bifrost: {score: no, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: no, source: docs, evidence: "https://docs.helicone.ai/"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: partial, source: docs, note: "Agents SDK state, not a gateway feature", evidence: "https://developers.cloudflare.com/agents/"}
+
+  # ===========================================================================
+  - id: deployment
+    name: Deployment model
+    summary: >-
+      Usually the first question in a regulated deal and the last one anybody
+      benchmarks.
+    dimensions:
+      - id: self_host
+        name: Fully self-hostable
+        why: Data residency and procurement without a vendor in the data path
+        weight: 2
+        cells:
+          everstack: {score: yes, source: repo, evidence: "infra/bare-metal/helm/everstack/"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/deploy"}
+          portkey: {score: partial, source: docs, note: "OSS gateway self-hosts; the control plane is commercial", evidence: "https://portkey.ai/docs/product/enterprise-offering/private-cloud-deployments"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: no, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/"}
+
+      - id: air_gapped
+        name: Runs air-gapped
+        why: Defence, health, and finance buyers cannot phone home
+        cells:
+          everstack: {score: partial, source: repo, note: "self-host works, but license activation polls the control plane by default", evidence: "config/default.yaml activation block"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/deploy"}
+          portkey: {score: paid, source: docs, evidence: "https://portkey.ai/docs/product/enterprise-offering/private-cloud-deployments"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: unknown, source: unknown}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: no, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/"}
+
+      - id: helm
+        name: Kubernetes Helm chart
+        why: How the deployment actually lands in an enterprise cluster
+        cells:
+          everstack: {score: yes, source: repo, evidence: "infra/bare-metal/helm/everstack/"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/deploy"}
+          portkey: {score: paid, source: docs, evidence: "https://portkey.ai/docs/product/enterprise-offering/private-cloud-deployments"}
+          bifrost: {score: unknown, source: unknown}
+          helicone: {score: unknown, source: unknown, note: "citation 404'd on 2026-08-31; re-verify before publishing"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: no, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/"}
+
+  # ===========================================================================
+  - id: protocol
+    name: Protocol surface
+    summary: >-
+      What a client can point at the gateway without changing its SDK.
+    dimensions:
+      - id: openai_api
+        name: OpenAI-compatible API
+        why: The de facto lingua franca; everything else is a migration
+        cells:
+          everstack: {score: yes, source: repo, note: "/openai/v1", evidence: "internal/api/api.go:571"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/proxy/user_keys"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/api-reference/inference-api"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/gateway"}
+          openrouter: {score: yes, source: docs, evidence: "https://openrouter.ai/docs/api-reference/overview"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/chat-completion/"}
+
+      - id: anthropic_api
+        name: Anthropic Messages API
+        why: Coding agents increasingly speak this natively
+        cells:
+          everstack: {score: yes, source: repo, evidence: "internal/lib/handlers/gateway/messages_handler.go"}
+          litellm: {score: yes, source: docs, evidence: "https://docs.litellm.ai/docs/anthropic_unified"}
+          portkey: {score: yes, source: docs, evidence: "https://portkey.ai/docs/api-reference/inference-api"}
+          bifrost: {score: yes, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: yes, source: docs, evidence: "https://docs.helicone.ai/gateway"}
+          openrouter: {score: partial, source: docs, note: "OpenAI shape only", evidence: "https://openrouter.ai/docs/api-reference/overview"}
+          cloudflare: {score: yes, source: docs, evidence: "https://developers.cloudflare.com/ai-gateway/providers/anthropic/"}
+
+      - id: a2a
+        name: A2A agent interop
+        why: Agents from different vendors calling each other
+        cells:
+          everstack: {score: partial, source: repo, note: "single-file implementation, early", evidence: "internal/a2a/"}
+          litellm: {score: no, source: docs, evidence: "https://docs.litellm.ai/"}
+          portkey: {score: no, source: docs, evidence: "https://portkey.ai/docs"}
+          bifrost: {score: no, source: docs, evidence: "https://github.com/maximhq/bifrost"}
+          helicone: {score: no, source: docs, evidence: "https://docs.helicone.ai/"}
+          openrouter: {score: no, source: docs, evidence: "https://openrouter.ai/docs"}
+          cloudflare: {score: unknown, source: unknown}

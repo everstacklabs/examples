@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Reference only. The OSS Portkey gateway is configured per request through",
+    "x-portkey-* headers rather than a server-side file, so the live routing",
+    "for this benchmark lives in the `portkey` target's `headers` block in",
+    "benchmarks/gateway/targets.yaml.",
+    "",
+    "This file records the equivalent config object, so a reader can see what",
+    "the headers amount to without reconstructing it from the target file."
+  ],
+  "strategy": { "mode": "fallback" },
+  "targets": [
+    {
+      "provider": "openai",
+      "custom_host": "http://upstream:9800/p/primary",
+      "api_key": "bench-upstream-key",
+      "override_params": { "model": "bench-model" }
+    },
+    {
+      "provider": "openai",
+      "custom_host": "http://upstream:9800/p/secondary",
+      "api_key": "bench-upstream-key",
+      "override_params": { "model": "bench-model" }
+    }
+  ],
+  "retry": { "attempts": 2, "on_status_codes": [429, 500, 502, 503, 504] }
+}

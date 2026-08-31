@@ -1,0 +1,46 @@
+# LiteLLM Proxy configuration for the gateway benchmark.
+#
+# Fairness notes:
+#   - Both routes point at the same mock upstream, so LiteLLM is not penalised
+#     by a slower backend than anyone else gets.
+#   - `bench-model` uses the primary profile, `bench-model-fallback` the
+#     secondary, which is what makes the failover scenario (C1) measurable.
+#   - No Redis is configured. LiteLLM only needs it for distributed caching and
+#     limits, and enabling a network hop nobody else in the comparison pays for
+#     would understate LiteLLM.
+
+model_list:
+  - model_name: bench-model
+    litellm_params:
+      model: openai/bench-model
+      api_base: http://upstream:9800/p/primary/v1
+      api_key: bench-upstream-key
+
+  - model_name: bench-model-fallback
+    litellm_params:
+      model: openai/bench-model
+      api_base: http://upstream:9800/p/secondary/v1
+      api_key: bench-upstream-key
+
+router_settings:
+  # Fallbacks are what scenario C1 probes. Without this the row reads
+  # "not configured" rather than "failed", which is the honest outcome.
+  fallbacks: [{"bench-model": ["bench-model-fallback"]}]
+  num_retries: 2
+  # Bounded so retry amplification (C3) stays inside the 4x threshold the
+  # scenario treats as absorbing an incident rather than amplifying it.
+  timeout: 30
+  allowed_fails: 3
+  cooldown_time: 5
+
+litellm_settings:
+  drop_params: false          # keep parameter fidelity (C8) honest
+  set_verbose: false
+  json_logs: true
+  request_timeout: 30
+
+general_settings:
+  master_key: sk-bench-master
+  # Set a low rpm here to exercise the rate-limit scenario (C5). Comment it out
+  # for the performance phases, which must not be limited.
+  # max_parallel_requests: 100

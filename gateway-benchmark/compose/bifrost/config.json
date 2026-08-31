@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Bifrost configuration for the gateway benchmark.",
+    "Points at the same mock upstream every other gateway uses.",
+    "Bifrost is the raw-speed comparison, so nothing here is tuned to slow it",
+    "down: no extra plugins, no logging, default pool sizing."
+  ],
+  "providers": {
+    "openai": {
+      "keys": [
+        {
+          "value": "env.OPENAI_API_KEY",
+          "models": ["bench-model"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://upstream:9800/p/primary/v1",
+        "default_request_timeout_in_seconds": 30,
+        "max_retries": 2
+      },
+      "concurrency_and_buffer_size": {
+        "concurrency": 256,
+        "buffer_size": 512
+      }
+    }
+  }
+}

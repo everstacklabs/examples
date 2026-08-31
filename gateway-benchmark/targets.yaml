@@ -1,0 +1,115 @@
+# AI gateway benchmark suite definition.
+#
+# Methodology: docs/design/gateway-benchmark.md
+#
+# Credentials are NEVER written here. Every target reads its key from an
+# environment variable. A benchmark suite gets copied, forked, and pasted into
+# issues; a config file is the last place a provider key should live.
+
+hardware: "fill in before publishing: CPU, cores, RAM, OS, container runtime"
+
+notes: >-
+  Every target proxies to the same deterministic mock upstream. Latency figures
+  are added latency over the `direct` control, never absolute, because the
+  absolute numbers just describe the mock's configured pacing.
+
+upstream:
+  # Published port of the `upstream` compose service.
+  base_url: http://localhost:9800
+  control_url: http://localhost:9800
+
+load:
+  runs: 3
+  warmup_seconds: 5
+  duration_seconds: 20
+  rps: 50
+  # Poisson arrivals: real traffic is bursty, and fixed-interval arrivals
+  # understate the queueing a gateway actually sees.
+  poisson: true
+  concurrency_steps: [1, 10, 50, 200]
+  saturation_rps_steps: [50, 100, 200, 400, 800, 1600]
+  timeout_seconds: 30
+  prompt_chars: 400
+
+targets:
+  # ---------------------------------------------------------------------------
+  # Control. The harness talking straight to the mock, no gateway in the path.
+  # Every added-latency number in the report is a delta against this row.
+  # ---------------------------------------------------------------------------
+  - name: direct
+    kind: control
+    chat_url: http://localhost:9800/p/primary/v1/chat/completions
+    models_url: http://localhost:9800/v1/models
+    model: bench-model
+    version: n/a
+
+  # ---------------------------------------------------------------------------
+  # Subject under test.
+  #
+  # /openai/v1 is the OpenAI-compatible surface. Do NOT point this at /v1: that
+  # path accepts OpenAI-format requests but returns proto-JSON, so an SSE client
+  # cannot read it (internal/api/api.go:571).
+  # ---------------------------------------------------------------------------
+  - name: everstack
+    kind: subject
+    chat_url: http://localhost:8080/openai/v1/chat/completions
+    models_url: http://localhost:8080/openai/v1/models
+    model: bench-model
+    fallback_model: bench-model-fallback
+    api_key_env: EVERSTACK_BENCH_KEY
+    secondary_key_env: EVERSTACK_BENCH_KEY_TENANT_B
+    container: gwbench-everstack
+    config_ref: benchmarks/gateway/compose/everstack/gateway.yaml
+
+  # ---------------------------------------------------------------------------
+  # Tier 1 competitors: self-hostable, so they can point at the same mock and
+  # have their overhead isolated.
+  #
+  # These configs are written from each project's documented schema but have not
+  # been validated against a live container in this repo. Run
+  # `gwbench validate` after `make bench-gateway-up`; anything failing is
+  # reported as unmeasured rather than silently dropped.
+  # ---------------------------------------------------------------------------
+  - name: litellm
+    chat_url: http://localhost:4000/v1/chat/completions
+    models_url: http://localhost:4000/v1/models
+    model: bench-model
+    fallback_model: bench-model-fallback
+    api_key_env: LITELLM_BENCH_KEY
+    container: gwbench-litellm
+    config_ref: benchmarks/gateway/compose/litellm/config.yaml
+
+  - name: bifrost
+    chat_url: http://localhost:8081/v1/chat/completions
+    models_url: http://localhost:8081/v1/models
+    model: bench-model
+    api_key_env: BIFROST_BENCH_KEY
+    container: gwbench-bifrost
+    config_ref: benchmarks/gateway/compose/bifrost/config.json
+    supports:
+      # Scored in the matrix from documentation rather than probed, until the
+      # container config is validated.
+      C6: false
+
+  - name: helicone
+    chat_url: http://localhost:8082/v1/chat/completions
+    model: bench-model
+    api_key_env: HELICONE_BENCH_KEY
+    container: gwbench-helicone
+    config_ref: benchmarks/gateway/compose/helicone/config.yaml
+    supports:
+      C6: false
+
+  - name: portkey
+    chat_url: http://localhost:8787/v1/chat/completions
+    model: bench-model
+    api_key_env: PORTKEY_BENCH_KEY
+    container: gwbench-portkey
+    config_ref: benchmarks/gateway/compose/portkey/config.json
+    # The OSS Portkey gateway is told its upstream per request via headers
+    # rather than a server-side config file.
+    headers:
+      x-portkey-provider: openai
+      x-portkey-custom-host: http://upstream:9800/p/primary
+    supports:
+      C6: false
