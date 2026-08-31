@@ -1,0 +1,112 @@
+# Everstack gateway configuration for the AI gateway benchmark.
+#
+# This is the subject under test. It is deliberately configured the way we would
+# tell a customer to run it, not stripped down to win a latency table: streaming
+# on, fallback on, exact cache on, observability on. If that costs us
+# milliseconds against a bare proxy, the report says so.
+#
+# Benchmarked surface: /openai/v1/chat/completions.
+# NOT /v1/chat/completions, which accepts OpenAI-format requests but returns
+# proto-JSON that an SSE client cannot read (internal/api/api.go:571).
+
+server:
+  config:
+    port: 8080
+    external_domain: localhost
+  cors:
+    enabled: false
+  security:
+    api_key_hash_secret: "${EVS_API_KEY_HASH_SECRET}"
+  telemetry:
+    otel:
+      enabled: true
+      mode: embedded
+      service_name: "everstack-gwbench"
+      tenant_type: "self_hosted"
+      tracing:
+        # Full sampling. Sampling down would understate the cost of the
+        # observability the rest of this report argues is the differentiator,
+        # which would be flattering and dishonest.
+        sampling_rate: 1.0
+        granularity: standard
+        trace_provider_calls: true
+        trace_stream_chunks: false
+        trace_fallbacks: true
+
+database:
+  mode: hybrid
+  postgres:
+    dsn: "${EVS_POSTGRES_DSN}"
+
+auth:
+  mode: "builtin"
+  builtin:
+    session_secure: false
+    session_same_site: "lax"
+    session_secret: "bench-only-session-secret-not-for-production-use-000"
+    session_max_age: 3600
+
+cache:
+  # Exact-match cache on. Scenario C7 proves it hits; C10 proves a hit is not
+  # readable across tenants, which is the check that actually matters.
+  enabled: true
+  type: redis
+  redis:
+    address: "everstack-redis:6379"
+    db: 0
+    ttl: 10m
+    pool_size: 100
+  semantic:
+    # Off for the benchmark. Semantic cache adds an embedding round trip that
+    # no other target in the comparison pays for, so leaving it on would make
+    # our own numbers look worse for a capability the matrix scores separately.
+    enabled: false
+
+gateway:
+  models:
+    - provider: openai_compatible
+      model:
+        - bench-model
+      api_key: "bench-upstream-key"
+      base_url: http://upstream:9800/p/primary/v1
+      max_tokens: 4096
+      default_alias: bench-model
+
+    # The failover destination. Scenario C1 makes the primary return 503 and
+    # checks whether the client ever sees it.
+    - provider: openai_compatible
+      model:
+        - bench-model-fallback
+      api_key: "bench-upstream-key"
+      base_url: http://upstream:9800/p/secondary/v1
+      max_tokens: 4096
+
+  load_balancer:
+    enabled: true
+    strategy: weighted
+    fallback:
+      enabled: true
+      default:
+        enabled: true
+        provider: openai_compatible
+        model: bench-model-fallback
+        max_tokens: 4096
+        temperature: 0
+
+  rate_limit:
+    # Off for the performance phases: a limit that trips mid-run would corrupt
+    # every latency number. The rate-limit scenario (C5) is run separately
+    # against a deployment that enables this block.
+    enabled: false
+    requests_per_minute: 6000
+    burst: 600
+    key_source: api_key
+
+features:
+  gateway:
+    # Both required for the streaming phases. Streaming is gated on the YAML
+    # toggle as well as the license manifest (internal/features/resolver.go:55),
+    # and a self-hosted run with no manifest poller resolves from YAML alone.
+    enable_streaming: true
+    enable_sse: true
+    enable_semantic_cache: false

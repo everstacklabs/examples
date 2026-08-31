@@ -1,0 +1,28 @@
+# Helicone AI Gateway configuration for the gateway benchmark.
+#
+# Routed at the same mock upstream as every other target. Telemetry export is
+# off: Helicone's value is its observability, but shipping spans to a cloud
+# endpoint during a latency benchmark would measure the network, and none of
+# the other targets are paying that cost here. The observability capability is
+# scored in the feature matrix instead, which is the right place for it.
+
+server:
+  address: 0.0.0.0
+  port: 8080
+
+routers:
+  default:
+    load-balance:
+      chat:
+        strategy: latency
+        targets:
+          - openai
+
+providers:
+  openai:
+    base-url: http://upstream:9800/p/primary
+    models:
+      - bench-model
+
+telemetry:
+  level: error
