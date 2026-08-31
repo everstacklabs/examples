@@ -108,9 +108,14 @@ OpenAI's variance and calling it a gateway difference. The mock removes that:
 latency number in the report is expressed as **added latency over control**, not
 as an absolute, because the absolute is an artifact of the mock's configuration.
 
-A second, clearly-labelled mode (`--live`) runs the same scenarios against a real
-provider for end-to-end realism. Its numbers are reported separately and never
-mixed with the overhead numbers.
+**Not implemented: a live-provider mode.** An earlier draft of this document
+described a `--live` flag for running the same scenarios against a real provider.
+It does not exist, and this note stands in for it rather than the claim.
+
+If it is built, the rule it must follow is that its numbers are reported
+separately and never mixed with the overhead numbers above, because they measure
+a different thing: the provider's variance plus the gateway's, with no way to
+separate the two. The mock exists precisely so that separation is possible.
 
 ## 5. What the benchmark measures
 

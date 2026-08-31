@@ -15,12 +15,21 @@ routers:
     load-balance:
       chat:
         strategy: latency
-        targets:
+        providers:
           - openai
 
 providers:
   openai:
-    base-url: http://upstream:9800/p/primary
+    # Root, with no path. This gateway does not preserve a base-url path:
+    # given http://upstream:9800/p/primary it requests /p/v1/chat/completions,
+    # dropping the profile segment. The mock serves the primary profile at the
+    # root path too, so pointing at the root routes correctly.
+    #
+    # Consequence: this target cannot be aimed at the secondary profile, so it
+    # has no failover destination and scenario C1 reports `not configured`
+    # rather than a pass or a fail. That is a limitation of this setup, not a
+    # statement about the product.
+    base-url: http://upstream:9800
     models:
       - bench-model
 

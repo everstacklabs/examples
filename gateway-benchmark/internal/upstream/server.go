@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,27 +57,64 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+prefix+"/v1/models", s.handleModels)
 	}
 
+	// Catch-all. A gateway that builds the wrong upstream path otherwise gets
+	// Go's bare "404 page not found" and never appears in the journal at all,
+	// so the failure looks like a bad request rather than a path mismatch.
+	// Recording it turns "why is this gateway 404ing" into a one-line answer.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/__control") {
+			http.NotFound(w, r)
+			return
+		}
+		s.Journal.Append(Entry{
+			At:        time.Now(),
+			Profile:   "-",
+			Path:      r.URL.Path,
+			Outcome:   "unmatched_path",
+			Status:    404,
+			ClientTag: r.Header.Get("X-Bench-Client"),
+		})
+		writeJSON(w, 404, oaiError("invalid_request_error",
+			"no handler for "+r.Method+" "+r.URL.Path+
+				" (the mock upstream serves /v1/... and /p/{profile}/v1/...); "+
+				"this usually means the gateway's configured base URL double-prefixes or omits /v1"))
+	})
+
 	return mux
 }
 
 // ---------- chat completions ----------
 
 type chatRequest struct {
-	Model          string           `json:"model"`
-	Stream         bool             `json:"stream"`
-	Messages       []map[string]any `json:"messages"`
-	MaxTokens      *int             `json:"max_tokens"`
-	Temperature    *float64         `json:"temperature"`
-	TopP           *float64         `json:"top_p"`
-	N              *int             `json:"n"`
-	Stop           any              `json:"stop"`
-	Seed           *int             `json:"seed"`
-	Tools          []any            `json:"tools"`
-	ToolChoice     any              `json:"tool_choice"`
-	ResponseFormat any              `json:"response_format"`
-	Logprobs       *bool            `json:"logprobs"`
-	User           string           `json:"user"`
-	StreamOptions  any              `json:"stream_options"`
+	Model    string           `json:"model"`
+	Stream   bool             `json:"stream"`
+	Messages []map[string]any `json:"messages"`
+	// Both spellings are accepted. OpenAI deprecated max_tokens in favour of
+	// max_completion_tokens, and a gateway that modernises the field is doing
+	// the right thing. Parsing only the old name would make the parameter
+	// fidelity scenario accuse it of dropping a parameter it faithfully
+	// translated, which is worse than not testing for it at all.
+	MaxTokens           *int     `json:"max_tokens"`
+	MaxCompletionTokens *int     `json:"max_completion_tokens"`
+	Temperature         *float64 `json:"temperature"`
+	TopP                *float64 `json:"top_p"`
+	N                   *int     `json:"n"`
+	Stop                any      `json:"stop"`
+	Seed                *int     `json:"seed"`
+	Tools               []any    `json:"tools"`
+	ToolChoice          any      `json:"tool_choice"`
+	ResponseFormat      any      `json:"response_format"`
+	Logprobs            *bool    `json:"logprobs"`
+	User                string   `json:"user"`
+	StreamOptions       any      `json:"stream_options"`
+}
+
+// maxTokens returns whichever spelling the caller used.
+func (c chatRequest) maxTokens() *int {
+	if c.MaxTokens != nil {
+		return c.MaxTokens
+	}
+	return c.MaxCompletionTokens
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +178,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outputToks := profile.Chunks
-	if req.MaxTokens != nil && *req.MaxTokens > 0 && *req.MaxTokens < outputToks {
-		outputToks = *req.MaxTokens
+	if mt := req.maxTokens(); mt != nil && *mt > 0 && *mt < outputToks {
+		outputToks = *mt
 	}
 
 	delay := profile.UnaryDelay
@@ -179,8 +217,8 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, p *Profile, 
 	}
 
 	total := p.Chunks
-	if req.MaxTokens != nil && *req.MaxTokens > 0 && *req.MaxTokens < total {
-		total = *req.MaxTokens
+	if mt := req.maxTokens(); mt != nil && *mt > 0 && *mt < total {
+		total = *mt
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -406,6 +444,17 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) baseEntry(r *http.Request, profile string, body []byte, req chatRequest) Entry {
 	sum := sha256.Sum256(body)
+
+	// Record the top-level key names as they arrived on the wire.
+	var raw map[string]json.RawMessage
+	var bodyKeys []string
+	if json.Unmarshal(body, &raw) == nil {
+		bodyKeys = make([]string, 0, len(raw))
+		for k := range raw {
+			bodyKeys = append(bodyKeys, k)
+		}
+		sort.Strings(bodyKeys)
+	}
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		auth = r.Header.Get("x-api-key")
@@ -428,6 +477,9 @@ func (s *Server) baseEntry(r *http.Request, profile string, body []byte, req cha
 	}
 	if req.MaxTokens != nil {
 		params["max_tokens"] = *req.MaxTokens
+	}
+	if req.MaxCompletionTokens != nil {
+		params["max_completion_tokens"] = *req.MaxCompletionTokens
 	}
 	if req.Seed != nil {
 		params["seed"] = *req.Seed
@@ -474,6 +526,7 @@ func (s *Server) baseEntry(r *http.Request, profile string, body []byte, req cha
 		AuthFP:      fp,
 		BodySHA:     hex.EncodeToString(sum[:])[:16],
 		Params:      params,
+		BodyKeys:    bodyKeys,
 		Headers:     headers,
 	}
 }
