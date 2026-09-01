@@ -182,11 +182,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		outputToks = *mt
 	}
 
-	delay := profile.UnaryDelay
-	if delay <= 0 {
-		delay = profile.TTFT + time.Duration(outputToks)*profile.ChunkDelay
-	}
-	sleepCtx(r, delay)
+	// Scale with the tokens actually produced, matching what the streaming path
+	// costs for the same output. A gateway that requests the upstream in
+	// streaming mode must not be charged more than one that does not.
+	sleepCtx(r, profile.EquivalentUnaryDelay(outputToks))
 
 	entry.Outcome, entry.Status, entry.OutputToks = "ok", 200, outputToks
 	seq := s.Journal.Append(entry)
@@ -396,6 +395,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if wire.UnaryDelayMs > 0 {
 		p.UnaryDelay = time.Duration(wire.UnaryDelayMs) * time.Millisecond
+		p.UnaryDelayExplicit = true
 	}
 	if wire.Fault != "" {
 		p.Fault = FaultMode(wire.Fault)

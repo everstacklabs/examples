@@ -36,10 +36,21 @@ type Profile struct {
 	// Timing knobs. These are what make the upstream deterministic, and every
 	// latency number in the report is an added-latency delta against a control
 	// run through this same configuration.
+	//
+	// UnaryDelay is derived from TTFT and ChunkDelay rather than set
+	// independently, so a unary response and a streamed one cost the same wall
+	// time for the same number of tokens. Gateways differ in whether they
+	// request the upstream in streaming mode: Everstack upgrades a
+	// non-streaming client request to a streaming upstream call, so when the
+	// two paths had different costs the benchmark charged it ~700ms that
+	// belonged entirely to the mock. Its real overhead was around 40ms.
 	TTFT       time.Duration `json:"ttft"`
 	ChunkDelay time.Duration `json:"chunk_delay"`
 	Chunks     int           `json:"chunks"`
 	UnaryDelay time.Duration `json:"unary_delay"`
+	// UnaryDelayExplicit marks UnaryDelay as set by a scenario rather than
+	// derived from the streaming pacing.
+	UnaryDelayExplicit bool `json:"unary_delay_explicit"`
 
 	// Fault injection.
 	Fault            FaultMode     `json:"fault"`
@@ -59,15 +70,34 @@ type Profile struct {
 // every 12 ms, which is roughly a fast hosted model and slow enough that a
 // gateway that buffers the stream is visible in the cadence metric.
 func DefaultProfile(name string) *Profile {
-	return &Profile{
+	p := &Profile{
 		Name:       name,
 		TTFT:       120 * time.Millisecond,
 		ChunkDelay: 12 * time.Millisecond,
 		Chunks:     64,
-		UnaryDelay: 300 * time.Millisecond,
 		Fault:      FaultNone,
 		Status:     503,
 	}
+	p.UnaryDelay = p.EquivalentUnaryDelay(p.Chunks)
+	return p
+}
+
+// EquivalentUnaryDelay is what a streamed response of n tokens costs end to
+// end. Serving the unary path for less would reward a gateway for the internal
+// choice of not streaming, which is not a property anyone is trying to measure.
+//
+// A scenario that sets unary_delay_ms explicitly still wins: several
+// correctness scenarios want a specific unary cost (a slow response to make a
+// cache hit obvious, a fast one to keep a burst short) and should not have it
+// silently recomputed.
+func (p *Profile) EquivalentUnaryDelay(n int) time.Duration {
+	if p.UnaryDelayExplicit {
+		return p.UnaryDelay
+	}
+	if n <= 0 {
+		n = p.Chunks
+	}
+	return p.TTFT + time.Duration(n)*p.ChunkDelay
 }
 
 // Seen returns how many requests this profile has received.
