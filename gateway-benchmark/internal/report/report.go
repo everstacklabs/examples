@@ -143,14 +143,20 @@ func writeAddedLatency(s *strings.Builder, b *Bundle, aggs map[string]aggregate,
 	s.WriteString("## P1. Added latency, non-streaming\n\n")
 	fmt.Fprintf(s, "Offered load %.0f rps. Figures are milliseconds added over the direct control, averaged across %d runs with the run-to-run standard deviation.\n\n",
 		b.Load.RPS, b.Load.Runs)
-	s.WriteString("| Gateway | added p50 | added p95 | added p99 | run-to-run sd (p99) | errors |\n|---|---|---|---|---|---|\n")
+	s.WriteString("The `upstream streamed` column is load-bearing. A gateway that upgrades a non-streaming " +
+		"client request to a streaming upstream call pays the wire cost of streaming for the same output, " +
+		"and comparing it against a control that did not stream charges it for an internal choice rather " +
+		"than for overhead. Where this column differs between a gateway and the control, the added-latency " +
+		"figure is not a like-for-like reading.\n\n")
+	s.WriteString("| Gateway | added p50 | added p95 | added p99 | run-to-run sd (p99) | errors | upstream streamed |\n|---|---|---|---|---|---|---|\n")
 
 	for _, a := range sortedBy(aggs, b, func(x aggregate) float64 { return x.addedP99 }) {
 		if a.target == b.ControlName {
 			continue
 		}
-		fmt.Fprintf(s, "| %s | %s | %s | %s | %.2f | %.2f%% |\n",
-			a.target, ms(a.addedP50), ms(a.addedP95), ms(a.addedP99), a.unaryP99.StdDev, a.errorRate*100)
+		fmt.Fprintf(s, "| %s | %s | %s | %s | %.2f | %.2f%% | %.0f%% |\n",
+			a.target, ms(a.addedP50), ms(a.addedP95), ms(a.addedP99), a.unaryP99.StdDev,
+			a.errorRate*100, streamedPct(b, a.target))
 	}
 	fmt.Fprintf(s, "\nControl absolute p50/p95/p99: %.1f / %.1f / %.1f ms.\n\n",
 		control.unaryP50.Mean, control.unaryP95.Mean, control.unaryP99.Mean)
@@ -640,6 +646,24 @@ func sortedBy(aggs map[string]aggregate, b *Bundle, key func(aggregate) float64)
 
 // streamAnomalies separates genuinely cut-short streams from complete ones that
 // merely omitted the [DONE] terminator.
+// streamedPct reports the share of a target's unary-phase upstream calls that
+// were made in streaming mode.
+func streamedPct(b *Bundle, target string) float64 {
+	p := findPerf(b, target)
+	if p == nil || len(p.Unary) == 0 {
+		return 0
+	}
+	var tot, streamed float64
+	for _, ph := range p.Unary {
+		tot += float64(ph.UpstreamCalls)
+		streamed += float64(ph.UpstreamCalls) * ph.UpstreamStreamedPct / 100
+	}
+	if tot == 0 {
+		return 0
+	}
+	return streamed / tot * 100
+}
+
 func streamAnomalies(b *Bundle, target string) (truncated, noSentinel int) {
 	p := findPerf(b, target)
 	if p == nil {

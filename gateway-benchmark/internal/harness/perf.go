@@ -28,10 +28,18 @@ type PhaseResult struct {
 	NonOK     int `json:"non_2xx"`
 	Truncated int `json:"truncated"`
 	// NoSentinel counts complete streams that omitted the [DONE] terminator.
-	NoSentinel int     `json:"no_sentinel"`
-	ErrorRate  float64 `json:"error_rate"`
-	Throughput float64 `json:"achieved_rps"`
-	PeakInUse  int     `json:"peak_in_flight"`
+	NoSentinel int `json:"no_sentinel"`
+	// UpstreamStreamedPct is the share of upstream calls this phase made in
+	// streaming mode. Gateways differ: some upgrade a non-streaming client
+	// request to a streaming upstream call, which costs more on the wire for
+	// the same output. Comparing such a gateway against a control that did not
+	// stream charges it for an internal choice, so the report prints this
+	// beside the latency rather than leaving it to be taken at face value.
+	UpstreamStreamedPct float64 `json:"upstream_streamed_pct"`
+	UpstreamCalls       int     `json:"upstream_calls"`
+	ErrorRate           float64 `json:"error_rate"`
+	Throughput          float64 `json:"achieved_rps"`
+	PeakInUse           int     `json:"peak_in_flight"`
 
 	OfferedRPS  float64 `json:"offered_rps"`
 	Concurrency int     `json:"concurrency,omitempty"`
@@ -80,6 +88,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 		res, err := runPhase(ctx, phaseSpec{
 			name:        fmt.Sprintf("unary/run%d", run+1),
 			suite:       suite,
+			ctrl:        ctrl,
 			target:      t,
 			stream:      false,
 			rps:         suite.Load.RPS,
@@ -101,6 +110,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 			res, err := runPhase(ctx, phaseSpec{
 				name:        fmt.Sprintf("streaming/run%d", run+1),
 				suite:       suite,
+				ctrl:        ctrl,
 				target:      t,
 				stream:      true,
 				rps:         suite.Load.RPS,
@@ -123,6 +133,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 		res, err := runPhase(ctx, phaseSpec{
 			name:        fmt.Sprintf("concurrency/%d", c),
 			suite:       suite,
+			ctrl:        ctrl,
 			target:      t,
 			stream:      false,
 			rps:         0, // unthrottled; the in-flight cap is the control
@@ -146,6 +157,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 		res, err := runPhase(ctx, phaseSpec{
 			name:        fmt.Sprintf("saturation/%.0frps", rps),
 			suite:       suite,
+			ctrl:        ctrl,
 			target:      t,
 			stream:      false,
 			rps:         rps,
@@ -175,6 +187,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 	res, err := runPhase(ctx, phaseSpec{
 		name:        "degraded/20pct-503",
 		suite:       suite,
+		ctrl:        ctrl,
 		target:      t,
 		stream:      false,
 		rps:         suite.Load.RPS,
@@ -194,6 +207,7 @@ func RunPerf(ctx context.Context, suite *Suite, t Target, ctrl *Control, log fun
 
 type phaseSpec struct {
 	name        string
+	ctrl        *Control
 	suite       *Suite
 	target      Target
 	stream      bool
@@ -233,6 +247,12 @@ func runPhase(ctx context.Context, spec phaseSpec) (*PhaseResult, error) {
 		},
 	}
 
+	// Bracket the phase so the journal reflects only this phase's traffic.
+	// Other gateways left running can be chatty in the background (a
+	// latency-based load balancer probes continuously), so counting from a
+	// reset is the only way this share means anything.
+	_ = spec.ctrl.Reset(ctx)
+
 	run, err := loadgen.Execute(ctx, cfg)
 	if err != nil {
 		sampler.Stop(0)
@@ -240,6 +260,16 @@ func runPhase(ctx context.Context, spec phaseSpec) (*PhaseResult, error) {
 	}
 
 	out := summarizePhase(spec.name, t.Name, run)
+	if entries, jerr := spec.ctrl.Journal(ctx); jerr == nil && len(entries) > 0 {
+		streamed := 0
+		for _, e := range entries {
+			if e.Stream {
+				streamed++
+			}
+		}
+		out.UpstreamCalls = len(entries)
+		out.UpstreamStreamedPct = float64(streamed) / float64(len(entries)) * 100
+	}
 	out.OfferedRPS = spec.rps
 	out.Resources = sampler.Stop(out.Requests)
 	return out, nil
