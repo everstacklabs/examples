@@ -29,6 +29,24 @@ wait: ## Block until every started gateway is accepting requests
 		done; \
 	done
 	@echo "gateways responding"
+	@$(MAKE) refresh-stale
+
+.PHONY: refresh-stale
+refresh-stale: ## Restart gateways that predate the current mock upstream
+	@# A gateway started before the upstream container was last recreated is
+	@# holding its old IP in a connection pool. LiteLLM runs four workers, so
+	@# this shows up as a partial failure rate (~40%) rather than a clean break,
+	@# which is easy to misread as the gateway being flaky.
+	@up_at=$$(docker inspect gwbench-upstream --format '{{.State.StartedAt}}' 2>/dev/null); \
+	[ -z "$$up_at" ] && exit 0; \
+	for c in gwbench-litellm gwbench-bifrost gwbench-helicone gwbench-portkey gwbench-everstack; do \
+		started=$$(docker inspect $$c --format '{{.State.StartedAt}}' 2>/dev/null) || continue; \
+		[ -z "$$started" ] && continue; \
+		if [ "$$started" \< "$$up_at" ]; then \
+			echo "  restarting $$c (older than the current upstream)"; \
+			docker restart $$c >/dev/null; \
+		fi; \
+	done
 
 .PHONY: up-subject
 up-subject: ## Also start Everstack (built from its public release) + its deps
