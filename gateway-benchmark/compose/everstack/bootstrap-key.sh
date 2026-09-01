@@ -31,8 +31,11 @@ echo "api key    : ${API_KEY}"
 echo "org id     : ${ORG_ID}"
 echo "stored hash: ${HASH}"
 
-# Everstack migrates into the `everstack` schema, not `public`, so the search
+# Everstack migrates into the everstack schema, not public, so the search
 # path has to be set explicitly or the insert fails with "relation does not exist".
+# NOTE: this heredoc is deliberately unquoted so ${HASH} and friends expand.
+# That also means the shell would command-substitute any backtick inside it, so
+# the SQL comments below use no backticks.
 docker exec -i "$PG_CONTAINER" psql -U postgres -d everstack -v ON_ERROR_STOP=1 <<SQL
 SET search_path TO everstack, public;
 -- sensitive_id must not be NULL. The read model scans it into a plain string,
@@ -51,7 +54,7 @@ VALUES ('${MODEL_PROVIDER}', '${MODEL_NAME}', 'active', 'fresh')
 ON CONFLICT DO NOTHING;
 
 -- The gateway's rate limiter reads runtime_config in the database, NOT the
--- gateway.yaml `gateway.rate_limit` block, which is silently ignored. The
+-- gateway.yaml gateway.rate_limit block, which is silently ignored. The
 -- seeded default is 500 rpm, i.e. 8.3 rps, so a perf phase offering 50 rps has
 -- 84% of its requests refused and the latency figures are computed from the
 -- survivors. No other gateway in this benchmark has a limit active during the
