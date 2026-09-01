@@ -50,7 +50,19 @@ INSERT INTO provider_model_status (provider_name, model_name, status, freshness)
 VALUES ('${MODEL_PROVIDER}', '${MODEL_NAME}', 'active', 'fresh')
 ON CONFLICT DO NOTHING;
 
+-- The gateway's rate limiter reads runtime_config in the database, NOT the
+-- gateway.yaml `gateway.rate_limit` block, which is silently ignored. The
+-- seeded default is 500 rpm, i.e. 8.3 rps, so a perf phase offering 50 rps has
+-- 84% of its requests refused and the latency figures are computed from the
+-- survivors. No other gateway in this benchmark has a limit active during the
+-- perf phases; the rate-limit scenario (C5) tests limits deliberately and
+-- separately.
+UPDATE runtime_config
+   SET config = jsonb_set(config::jsonb, '{enabled}', 'false'::jsonb)
+ WHERE section = 'rate_limit';
+
 SELECT id, name, org_id, sensitive_id, COALESCE(revoked, FALSE) AS revoked FROM api_keys WHERE hash = '${HASH}';
+SELECT section, config::text FROM runtime_config WHERE section = 'rate_limit';
 SELECT provider_name, model_name, status FROM provider_model_status;
 SQL
 

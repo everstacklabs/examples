@@ -62,11 +62,21 @@ services:
     # every public competitor without needing credentials at all. The subject is
     # opt-in: `docker compose --profile subject up -d`.
     profiles: ["subject"]
+    # Health conditions, not bare depends_on: the server exits immediately if
+    # ClickHouse or Postgres is not yet accepting connections, and plain
+    # depends_on only waits for the container to be created.
     depends_on:
-      - upstream
-      - everstack-db
-      - everstack-redis
-      - everstack-clickhouse
+      upstream:
+        condition: service_started
+      everstack-db:
+        condition: service_healthy
+      everstack-redis:
+        condition: service_started
+      everstack-clickhouse:
+        condition: service_healthy
+      everstack-otel:
+        condition: service_started
+    restart: on-failure:3
     ports:
       - "8080:8080"
     command: ["serve", "--config", "/etc/everstack/gateway.yaml", "--port", "8080"]
@@ -87,6 +97,7 @@ services:
   everstack-db:
     profiles: ["subject"]
     image: postgres:16-alpine
+    mem_limit: 1g
     container_name: gwbench-everstack-db
     environment:
       - POSTGRES_PASSWORD=postgres
@@ -109,15 +120,42 @@ services:
     profiles: ["subject"]
     image: clickhouse/clickhouse-server:25.8-alpine
     container_name: gwbench-everstack-clickhouse
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    # Bounds the subject's *dependency*, not the gateway container being
+    # measured, so this does not advantage or handicap anything in the latency
+    # tables.
+    #
+    # 4g with an internal ceiling below it, not a bare 2g cap. Under full trace
+    # sampling at benchmark load ClickHouse exceeded 2g and was OOM-killed
+    # (exit 137) mid-run; the gateway's trace writes then blocked and its p50
+    # latency reached 11 SECONDS. That is a dead dependency being measured as
+    # proxy overhead. max_server_memory_usage makes ClickHouse shed load
+    # internally instead of being killed by the kernel.
+    mem_limit: 4g
     environment:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
       - CLICKHOUSE_DB=everstack
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-    ulimits:
-      nofile: {soft: 262144, hard: 262144}
+      - CLICKHOUSE_MAX_SERVER_MEMORY_USAGE=3000000000
     tmpfs:
       - /var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --password clickhouse -q 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  everstack-otel:
+    profiles: ["subject"]
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: gwbench-everstack-otel
+    command: ["--config=/etc/otel/collector.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otel/collector.yaml:ro
+    mem_limit: 512m
 
   everstack-redis:
     profiles: ["subject"]

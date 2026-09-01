@@ -1,0 +1,37 @@
+# Minimal OTLP collector for the benchmark.
+#
+# Everstack's `embedded` telemetry mode ships spans over OTLP to a collector.
+# With no collector present every export fails and back-pressures the request
+# path, which shows up as multi-second gateway latency that has nothing to do
+# with proxying. Running a real collector keeps the observability work in the
+# request path (so the subject is not flattered by doing less) while removing
+# the dead-socket artifact.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  # Discard after receipt. The cost being measured is the gateway's export
+  # work, not a downstream backend's ingest speed.
+  nop:
+
+service:
+  telemetry:
+    logs:
+      level: error
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]

@@ -266,6 +266,14 @@ func doRequest(ctx context.Context, cfg Config, body []byte, scheduled time.Time
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("X-Bench-Seq", fmt.Sprint(idx))
+	// A unique correlation id per request. This is a standard tracing header
+	// that gateways which do not use it simply ignore, and it keeps a
+	// *policy* limit from being measured as *latency*: a gateway whose rate
+	// limiter is keyed on correlation id collapses to one shared bucket when
+	// the header is absent, so the perf phases would measure its default quota
+	// rather than its proxy overhead. The rate-limit scenario (C5) deliberately
+	// omits this header so the limit is still exercised and reported.
+	req.Header.Set("X-Correlation-Id", fmt.Sprintf("gwbench-%d-%d", scheduled.UnixNano(), idx))
 	if cfg.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}

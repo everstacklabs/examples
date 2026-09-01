@@ -26,6 +26,17 @@ server:
     otel:
       enabled: true
       mode: embedded
+      collector_url: "everstack-otel:4317"
+      # Export straight to ClickHouse rather than over OTLP. `embedded` mode
+      # otherwise ships spans to localhost:4317, and with no collector in this
+      # container every export fails and back-pressures the request path: the
+      # gateway could not drain 50 rps and p50 latency reached 11 SECONDS,
+      # which is a broken telemetry sink being measured as proxy overhead.
+      #
+      # Telemetry stays ON. Turning it off would make the subject look faster
+      # by doing less work than its own recommended configuration.
+      direct_export:
+        enabled: true
       service_name: "everstack-gwbench"
       tenant_type: "self_hosted"
       tracing:
