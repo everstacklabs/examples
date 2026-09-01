@@ -16,8 +16,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -274,6 +276,16 @@ func writePartial(outDir string, b *report.Bundle) error {
 	return os.WriteFile(filepath.Join(outDir, "partial.md"), []byte(report.Markdown(b)), 0o644)
 }
 
+// containerRunning reports whether a named container is up, so validate can
+// tell "not started" apart from "started and broken".
+func containerRunning(ctx context.Context, name string) bool {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", name).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "true"
+}
+
 func filterTargets(all []harness.Target, only string) []harness.Target {
 	if only == "" {
 		return all
@@ -356,11 +368,19 @@ func cmdValidate(ctx context.Context, args []string) error {
 	}
 
 	fmt.Printf("%-14s %-8s %s\n", "TARGET", "STATE", "DETAIL")
-	ok, bad := 0, 0
+	ok, bad, down := 0, 0, 0
 	for _, t := range suite.Targets {
 		state, detail := "ok", ""
 		if t.Skip {
 			state, detail = "skipped", t.SkipReason
+		} else if t.Container != "" && !containerRunning(ctx, t.Container) {
+			// Defined but not started is not a failure. The subject sits behind
+			// a Compose profile, so a plain `make up` legitimately leaves it
+			// down, and reporting that as FAIL trains people to ignore the
+			// column that is supposed to mean something.
+			state = "not started"
+			detail = "container " + t.Container + " is not running (subject targets need `make up-subject`)"
+			down++
 		} else if err := preflight(ctx, t); err != nil {
 			state, detail = "FAIL", err.Error()
 			bad++
@@ -373,7 +393,10 @@ func cmdValidate(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("%-14s %-8s %s\n", t.Name, state, detail)
 	}
-	fmt.Printf("\n%d usable, %d failing\n", ok, bad)
+	fmt.Printf("\n%d usable, %d failing, %d not started\n", ok, bad, down)
+	if down > 0 {
+		fmt.Println("\nNot-started targets are simply down, not broken. Start the subject with `make up-subject`.")
+	}
 	if bad > 0 {
 		fmt.Println("\nFailing targets are skipped by a real run and listed in the report as unmeasured,")
 		fmt.Println("so a broken competitor container never silently disappears from the comparison.")
