@@ -203,7 +203,14 @@ services:
       # not /app/config. Mounting the wrong path fails open: the gateway starts
       # healthy and then 400s every request with "could not auto resolve a
       # provider", which looks like a bad request rather than a missing config.
-      - ./bifrost:/app/data
+      #
+      # Mount the FILE, not the directory. Bifrost runs as uid 1000 and writes a
+      # SQLite store next to its config; bind-mounting the whole directory hands
+      # it a host-owned path it cannot write to on Linux, where it dies ~30s
+      # after starting. Docker Desktop translates uids so this only fails off a
+      # developer laptop -- which is exactly how it reached CI unnoticed.
+      - ./bifrost/config.json:/app/data/config.json:ro
+      - bifrost-data:/app/data
     environment:
       - APP_PORT=8080
       - OPENAI_API_KEY=bench-upstream-key
@@ -257,3 +264,6 @@ services:
     environment:
       - PORT=8787
       - LOG_LEVEL=error
+
+volumes:
+  bifrost-data:
