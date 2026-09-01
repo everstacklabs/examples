@@ -59,8 +59,12 @@ targets:
     kind: subject
     chat_url: http://localhost:8080/openai/v1/chat/completions
     models_url: http://localhost:8080/openai/v1/models
-    model: bench-model
-    fallback_model: bench-model-fallback
+    # A catalogued model name, not bench-model: Everstack resolves models
+    # against its catalog, which has no entries for arbitrary names. The mock
+    # echoes back whatever model it is given, so the name only has to satisfy
+    # the catalog. See compose/everstack/gateway.yaml.
+    model: gpt-4o-mini
+    default_key: bench-key
     api_key_env: EVERSTACK_BENCH_KEY
     secondary_key_env: EVERSTACK_BENCH_KEY_TENANT_B
     container: gwbench-everstack

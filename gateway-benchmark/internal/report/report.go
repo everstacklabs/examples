@@ -172,14 +172,19 @@ func writeStreaming(s *strings.Builder, b *Bundle, aggs map[string]aggregate, co
 		"A gateway that emits its own opening frame early would otherwise post a flattering TTFT while the user still sees nothing.\n\n")
 	s.WriteString("Inter-chunk p99 is the tell for buffering: the upstream paces tokens at a fixed interval, so a gateway that " +
 		"collects and re-emits them in bursts shows a stretched tail here even when its TTFT looks fine.\n\n")
-	s.WriteString("| Gateway | added TTFT | inter-chunk p99 | truncated streams |\n|---|---|---|---|\n")
+	s.WriteString("A stream is only counted as truncated if it carried neither a `[DONE]` sentinel nor a " +
+		"`finish_reason`. A gateway that delivers every frame and a finish_reason but omits `[DONE]` is " +
+		"listed separately: that is a protocol deviation which hangs clients waiting for the sentinel, " +
+		"not lost output.\n\n")
+	s.WriteString("| Gateway | added TTFT | inter-chunk p99 | truncated | no [DONE] sentinel |\n|---|---|---|---|---|\n")
 
 	for _, a := range sortedBy(aggs, b, func(x aggregate) float64 { return x.addedTTFT }) {
 		if a.target == b.ControlName || !a.hasStreaming {
 			continue
 		}
-		fmt.Fprintf(s, "| %s | %s | %.2f ms | %d |\n",
-			a.target, ms(a.addedTTFT), a.interChunkP99.Mean, truncatedCount(b, a.target))
+		trunc, noSent := streamAnomalies(b, a.target)
+		fmt.Fprintf(s, "| %s | %s | %.2f ms | %d | %d |\n",
+			a.target, ms(a.addedTTFT), a.interChunkP99.Mean, trunc, noSent)
 	}
 	fmt.Fprintf(s, "\nControl TTFT %.1f ms, control inter-chunk p99 %.2f ms.\n\n",
 		control.streamTTFT.Mean, control.interChunkP99.Mean)
@@ -633,16 +638,18 @@ func sortedBy(aggs map[string]aggregate, b *Bundle, key func(aggregate) float64)
 	return out
 }
 
-func truncatedCount(b *Bundle, target string) int {
+// streamAnomalies separates genuinely cut-short streams from complete ones that
+// merely omitted the [DONE] terminator.
+func streamAnomalies(b *Bundle, target string) (truncated, noSentinel int) {
 	p := findPerf(b, target)
 	if p == nil {
-		return 0
+		return 0, 0
 	}
-	n := 0
 	for _, ph := range p.Streaming {
-		n += ph.Truncated
+		truncated += ph.Truncated
+		noSentinel += ph.NoSentinel
 	}
-	return n
+	return truncated, noSentinel
 }
 
 func statusCell(c harness.Check) string {

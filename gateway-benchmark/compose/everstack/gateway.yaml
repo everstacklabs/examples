@@ -16,7 +16,12 @@ server:
   cors:
     enabled: false
   security:
-    api_key_hash_secret: "${EVS_API_KEY_HASH_SECRET}"
+    # Literal, not ${EVS_API_KEY_HASH_SECRET}: this config file is not passed
+    # through envsubst, so a variable reference is stored verbatim and the
+    # server then hashes API keys with the literal string "${EVS_API_KEY_HASH_SECRET}"
+    # instead of the value. Every key check fails with "Invalid API key" and
+    # nothing in the logs points at the cause. Benchmark-only value.
+    api_key_hash_secret: "bench-only-not-a-production-secret"
   telemetry:
     otel:
       enabled: true
@@ -64,32 +69,35 @@ cache:
 
 gateway:
   models:
-    - provider: openai_compatible
+    # The `openai` provider with a custom base_url, rather than
+    # `openai_compatible`. Everstack resolves a request's model against its
+    # model catalog, and the catalog ships no entries for openai_compatible, so
+    # a request there fails with "no provider found for model" no matter what
+    # the YAML declares. Using a catalogued model name against a redirected
+    # base_url is how a real deployment points at a private endpoint.
+    #
+    # The mock upstream echoes back whatever model name it is given, so the
+    # name only has to satisfy the catalog.
+    - provider: openai
       model:
-        - bench-model
+        - gpt-4o-mini
       api_key: "bench-upstream-key"
       base_url: http://upstream:9800/p/primary/v1
       max_tokens: 4096
-      default_alias: bench-model
-
-    # The failover destination. Scenario C1 makes the primary return 503 and
-    # checks whether the client ever sees it.
-    - provider: openai_compatible
-      model:
-        - bench-model-fallback
-      api_key: "bench-upstream-key"
-      base_url: http://upstream:9800/p/secondary/v1
-      max_tokens: 4096
+      default_alias: gpt-4o-mini
 
   load_balancer:
     enabled: true
     strategy: weighted
+    # Required whenever the load balancer is enabled; config validation refuses
+    # to start without it.
+    key_source: api_key
     fallback:
       enabled: true
       default:
         enabled: true
-        provider: openai_compatible
-        model: bench-model-fallback
+        provider: openai
+        model: gpt-4o-mini
         max_tokens: 4096
         temperature: 0
 
