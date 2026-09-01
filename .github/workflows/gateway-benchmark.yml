@@ -1,0 +1,125 @@
+name: Gateway Benchmark
+
+# Manual only, on purpose. A full run takes the better part of an hour and
+# starts ten containers; nobody wants that firing on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: "Run size"
+        type: choice
+        default: quick
+        options: [quick, full]
+      targets:
+        description: "Which set to measure"
+        type: choice
+        default: both
+        options: [both, competitors, subject]
+
+permissions:
+  contents: read
+
+jobs:
+  # The competitor set and the subject run as separate jobs, each on its own
+  # runner. Everstack needs five supporting containers, and putting that beside
+  # four competitor gateways and a load generator is what contaminated earlier
+  # local runs -- the subject fell over and took a competitor's numbers with it.
+  benchmark:
+    name: ${{ matrix.set }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        set: ${{ fromJSON(github.event.inputs.targets == 'both' && '["competitors","subject"]' || format('["{0}"]', github.event.inputs.targets)) }}
+
+    defaults:
+      run:
+        working-directory: gateway-benchmark
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: gateway-benchmark/go.sum
+
+      - name: Record the machine
+        run: |
+          echo "### Runner" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "cpus:   $(nproc)" >> $GITHUB_STEP_SUMMARY
+          free -h | head -2 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          # A benchmark without the machine it ran on is not reproducible.
+          python3 - <<'PY'
+          import re, subprocess, pathlib
+          cpus = subprocess.run(["nproc"], capture_output=True, text=True).stdout.strip()
+          mem  = subprocess.run(["bash","-lc","free -g | awk '/Mem:/{print $2}'"], capture_output=True, text=True).stdout.strip()
+          p = pathlib.Path("targets.yaml"); s = p.read_text()
+          s = re.sub(r'^hardware: .*$',
+                     f'hardware: "GitHub Actions ubuntu-latest, {cpus} vCPU, {mem} GB RAM"',
+                     s, count=1, flags=re.M)
+          p.write_text(s)
+          PY
+
+      - name: Shrink the run
+        if: github.event.inputs.scale == 'quick'
+        run: |
+          # A quick pass is for checking the harness end to end, not for
+          # publishing. The report still says how many runs it averaged.
+          sed -i 's/^  runs: .*/  runs: 1/;
+                  s/^  duration_seconds: .*/  duration_seconds: 8/;
+                  s/^  warmup_seconds: .*/  warmup_seconds: 2/;
+                  s/^  concurrency_steps: .*/  concurrency_steps: [1, 10, 50]/;
+                  s/^  saturation_rps_steps: .*/  saturation_rps_steps: [50, 100, 200]/' targets.yaml
+
+      - name: Start the stack
+        run: |
+          if [ "${{ matrix.set }}" = "subject" ]; then
+            make up-subject
+          else
+            make up
+          fi
+
+      - name: Validate
+        run: make validate
+
+      - name: Run
+        run: |
+          if [ "${{ matrix.set }}" = "subject" ]; then
+            go run ./cmd/gwbench run -only everstack
+          else
+            go run ./cmd/gwbench run -only litellm,bifrost,helicone,portkey
+          fi
+
+      - name: Report
+        if: always()
+        run: |
+          # partial.md exists even if a target died mid-run, which is the whole
+          # point of writing results incrementally.
+          f=results/latest.md; [ -f "$f" ] || f=results/partial.md
+          [ -f "$f" ] && cat "$f" >> $GITHUB_STEP_SUMMARY || echo "no report produced" >> $GITHUB_STEP_SUMMARY
+
+      - name: Container state on failure
+        if: failure()
+        run: |
+          docker ps -a --format '{{.Names}}\t{{.Status}}'
+          for c in $(docker ps -aq --filter name=gwbench); do
+            echo "=== $(docker inspect $c --format '{{.Name}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}') ==="
+            docker logs --tail 40 "$c" 2>&1 | tail -40
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-${{ matrix.set }}
+          path: |
+            gateway-benchmark/results/*.json
+            gateway-benchmark/results/*.md
+          retention-days: 30
+
+      - name: Tear down
+        if: always()
+        run: make down || true

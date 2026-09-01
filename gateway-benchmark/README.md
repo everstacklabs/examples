@@ -81,6 +81,31 @@ mid-run, and the resulting numbers were unusable for Everstack *and* for Bifrost
 measured alongside it. If the machine is tight, measure the competitors and the
 subject in separate runs (`-only everstack`), each against its own control.
 
+## Running it somewhere other than your laptop
+
+A full pass starts ten containers and runs for the better part of an hour. On a
+developer machine that is already running other stacks, the result is usually a
+measurement of the machine rather than of any gateway: containers get OOM-killed
+mid-run and the numbers are quietly wrong rather than obviously missing.
+
+Because the whole benchmark is credential-free -- including the subject, which
+builds from a public release binary -- it runs on a stock CI runner with nothing
+else competing:
+
+**Actions → Gateway Benchmark → Run workflow.** Choose `quick` to check the
+harness end to end (a few minutes) or `full` for numbers worth publishing.
+
+The competitor set and the subject run as **separate jobs on separate runners**.
+That is deliberate: Everstack needs five supporting containers, and putting that
+beside four competitor gateways and a load generator is what contaminated
+earlier local runs -- the subject fell over and took a competitor's numbers down
+with it. Each job measures against its own control, which is what added-latency
+is relative to anyway.
+
+Each job writes the report to its step summary and uploads `results/*.json`
+alongside it, so the raw per-request data is downloadable rather than just the
+summary.
+
 ## What it measures
 
 **Performance (P1 to P7)** - added latency p50/p95/p99, streaming TTFT, streaming
