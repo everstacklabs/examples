@@ -108,8 +108,11 @@ jobs:
           f=results/latest.md; [ -f "$f" ] || f=results/partial.md
           [ -f "$f" ] && cat "$f" >> $GITHUB_STEP_SUMMARY || echo "no report produced" >> $GITHUB_STEP_SUMMARY
 
-      - name: Container state on failure
-        if: failure()
+      # Always, not just on failure. A target that crashes is reported as
+      # unmeasured and the job still succeeds by design, so without this the
+      # only evidence of why a gateway dropped out is gone when the runner is.
+      - name: Container state
+        if: always()
         run: |
           docker ps -a --format '{{.Names}}\t{{.Status}}'
           for c in $(docker ps -aq --filter name=gwbench); do

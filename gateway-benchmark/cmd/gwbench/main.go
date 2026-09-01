@@ -286,6 +286,22 @@ func containerRunning(ctx context.Context, name string) bool {
 	return strings.TrimSpace(string(out)) == "true"
 }
 
+// containerPostMortem reports whether a stopped container still exists and how
+// it ended, so a crash is not mistaken for something that was never started.
+func containerPostMortem(ctx context.Context, name string) (exists bool, exitCode int, oom bool) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		"{{.State.ExitCode}} {{.State.OOMKilled}}", name).Output()
+	if err != nil {
+		return false, 0, false
+	}
+	var code int
+	var killed bool
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d %t", &code, &killed); err != nil {
+		return true, 0, false
+	}
+	return true, code, killed
+}
+
 func filterTargets(all []harness.Target, only string) []harness.Target {
 	if only == "" {
 		return all
@@ -374,13 +390,19 @@ func cmdValidate(ctx context.Context, args []string) error {
 		if t.Skip {
 			state, detail = "skipped", t.SkipReason
 		} else if t.Container != "" && !containerRunning(ctx, t.Container) {
-			// Defined but not started is not a failure. The subject sits behind
-			// a Compose profile, so a plain `make up` legitimately leaves it
-			// down, and reporting that as FAIL trains people to ignore the
-			// column that is supposed to mean something.
-			state = "not started"
-			detail = "container " + t.Container + " is not running (subject targets need `make up-subject`)"
-			down++
+			// Never created and started-then-died are different problems, and
+			// telling someone to run `make up-subject` when their container
+			// actually crashed sends them the wrong way entirely.
+			if exists, exit, oom := containerPostMortem(ctx, t.Container); exists {
+				state = "CRASHED"
+				detail = fmt.Sprintf("container %s exited (code %d, oom=%v) - check `docker logs %s`",
+					t.Container, exit, oom, t.Container)
+				bad++
+			} else {
+				state = "not started"
+				detail = "container " + t.Container + " does not exist (subject targets need `make up-subject`)"
+				down++
+			}
 		} else if err := preflight(ctx, t); err != nil {
 			state, detail = "FAIL", err.Error()
 			bad++
