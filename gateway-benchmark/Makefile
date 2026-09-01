@@ -12,9 +12,23 @@ help: ## Show this help
 .PHONY: up
 up: ## Start the mock upstream and every public competitor gateway
 	@$(COMPOSE) up -d --build
-	@echo "waiting for containers to settle..."
-	@sleep 10
+	@$(MAKE) wait
 	@$(MAKE) validate
+
+.PHONY: wait
+wait: ## Block until every started gateway is accepting requests
+	@echo "waiting for gateways (LiteLLM boots ~40s with 4 workers)..."
+	@for probe in 9800:__control/health 4000:health/liveliness 8081: 8082: 8787:; do \
+		port=$${probe%%:*}; path=$${probe#*:}; \
+		docker ps --format '{{.Ports}}' | grep -q ":$$port->" || continue; \
+		i=0; \
+		until curl -s -m 3 -o /dev/null "http://localhost:$$port/$$path"; do \
+			i=$$((i+1)); \
+			if [ $$i -ge 40 ]; then echo "  port $$port did not respond in 120s"; break; fi; \
+			sleep 3; \
+		done; \
+	done
+	@echo "gateways responding"
 
 .PHONY: up-subject
 up-subject: ## Also start Everstack (built from its public release) + its deps
