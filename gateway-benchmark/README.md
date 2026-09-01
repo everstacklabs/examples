@@ -55,24 +55,31 @@ fastest way to confirm a new machine is set up correctly.
 
 ## Running the Everstack column
 
-Everstack's container image is in a **private registry**, so unlike every other
-target it is not pullable from a fresh clone. It sits behind a Compose profile
-for that reason: `make up` deliberately does not try to start it, so a first run
-never fails on a pull nobody can satisfy.
+Everstack's *container images* are private, but its **server binary is published
+on the public releases page**, so `compose/everstack/Dockerfile` builds the
+subject from that. No registry credentials are needed.
 
-If you have access:
+It is behind a Compose profile because it also needs Postgres, Redis,
+ClickHouse, and an OTLP collector, which is a lot to ask of a laptop that is
+already running four competitor gateways:
 
 ```sh
-docker login ghcr.io                       # needs a token with read:packages
-export EVERSTACK_IMAGE=ghcr.io/everstacklabs/mf:<tag>
-export EVERSTACK_BENCH_KEY=...
-make up-subject
+make up-subject     # builds Everstack, starts its deps, mints its key, validates
+make bench
 ```
 
-Everything else in this repo, including the control and every competitor,
-reproduces from public images alone. If you cannot pull the Everstack image, the
-benchmark still runs and the report lists Everstack as unmeasured rather than
-quietly dropping it.
+`make up-subject` runs `make bootstrap` for you. That script exists because a
+fresh Everstack cannot serve an authenticated request until a key row is in its
+database, and there is no CLI command to mint one. It also disables the shipped
+500 rpm rate limit, which is **not** special-casing: no other gateway here has a
+limit active during the perf phases, and the rate-limit scenario (C5) tests
+limits deliberately and separately. See the comments in the script.
+
+**Give this room.** The subject's five containers plus four competitors plus the
+load generator did not fit on an 18 GB laptop: ClickHouse was OOM-killed
+mid-run, and the resulting numbers were unusable for Everstack *and* for Bifrost
+measured alongside it. If the machine is tight, measure the competitors and the
+subject in separate runs (`-only everstack`), each against its own control.
 
 ## What it measures
 
