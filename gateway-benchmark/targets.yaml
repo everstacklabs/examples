@@ -27,7 +27,12 @@ load:
   # understate the queueing a gateway actually sees.
   poisson: true
   concurrency_steps: [1, 10, 50, 200]
-  saturation_rps_steps: [50, 100, 200, 400, 800, 1600]
+  # Capped at 800 on purpose. On an 18 GB laptop the 1600 rps step killed the
+  # container VM twice, taking the whole run with it. 800 is therefore the
+  # ceiling of this harness on this host, NOT a ceiling any gateway hit: the
+  # P4 table's notes column says which targets were still climbing when the
+  # sweep stopped. Raise it on a machine with more headroom.
+  saturation_rps_steps: [50, 100, 200, 400, 800]
   timeout_seconds: 30
   # The timeout scenarios (C4, C11) must out-wait the gateways rather than race
   # them. Every compose config here sets a 30s request timeout, so a probe that
@@ -59,8 +64,12 @@ targets:
     kind: subject
     chat_url: http://localhost:8080/openai/v1/chat/completions
     models_url: http://localhost:8080/openai/v1/models
-    model: bench-model
-    fallback_model: bench-model-fallback
+    # A catalogued model name, not bench-model: Everstack resolves models
+    # against its catalog, which has no entries for arbitrary names. The mock
+    # echoes back whatever model it is given, so the name only has to satisfy
+    # the catalog. See compose/everstack/gateway.yaml.
+    model: gpt-4o-mini
+    default_key: bench-key
     api_key_env: EVERSTACK_BENCH_KEY
     secondary_key_env: EVERSTACK_BENCH_KEY_TENANT_B
     container: gwbench-everstack

@@ -21,12 +21,14 @@ type PhaseResult struct {
 	TTFT       stats.Summary `json:"ttft"`
 	InterChunk stats.Summary `json:"inter_chunk"`
 
-	Requests   int     `json:"requests"`
-	Offered    int     `json:"offered"`
-	Dropped    int     `json:"dropped"`
-	Errors     int     `json:"errors"`
-	NonOK      int     `json:"non_2xx"`
-	Truncated  int     `json:"truncated"`
+	Requests  int `json:"requests"`
+	Offered   int `json:"offered"`
+	Dropped   int `json:"dropped"`
+	Errors    int `json:"errors"`
+	NonOK     int `json:"non_2xx"`
+	Truncated int `json:"truncated"`
+	// NoSentinel counts complete streams that omitted the [DONE] terminator.
+	NoSentinel int     `json:"no_sentinel"`
 	ErrorRate  float64 `json:"error_rate"`
 	Throughput float64 `json:"achieved_rps"`
 	PeakInUse  int     `json:"peak_in_flight"`
@@ -268,6 +270,9 @@ func summarizePhase(phase, target string, run *loadgen.Run) *PhaseResult {
 		}
 		if r.Truncated {
 			res.Truncated++
+		}
+		if r.NoSentinel {
+			res.NoSentinel++
 		}
 		// Only successful requests contribute to the latency distribution. A
 		// fast 500 is not a fast response, and letting errors into the

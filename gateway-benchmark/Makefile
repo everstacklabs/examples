@@ -17,10 +17,18 @@ up: ## Start the mock upstream and every public competitor gateway
 	@$(MAKE) validate
 
 .PHONY: up-subject
-up-subject: ## Also start Everstack (requires EVERSTACK_IMAGE; see README)
+up-subject: ## Also start Everstack (built from its public release) + its deps
 	@$(COMPOSE) --profile subject up -d --build
-	@sleep 10
+	@echo "waiting for Everstack to come up..."
+	@i=0; until docker logs gwbench-everstack 2>&1 | tail -60 | grep -q "server is listening" || [ $$i -ge 40 ]; do i=$$((i+1)); sleep 3; done
+	@$(MAKE) bootstrap
+	@docker restart gwbench-everstack >/dev/null
+	@i=0; until docker logs gwbench-everstack 2>&1 | tail -60 | grep -q "server is listening" || [ $$i -ge 40 ]; do i=$$((i+1)); sleep 3; done
 	@$(MAKE) validate
+
+.PHONY: bootstrap
+bootstrap: ## Mint the benchmark API key and activate its model in Everstack
+	@./compose/everstack/bootstrap-key.sh
 
 .PHONY: down
 down: ## Tear the stack down

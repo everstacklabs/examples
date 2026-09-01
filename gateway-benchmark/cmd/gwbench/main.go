@@ -147,6 +147,14 @@ func cmdRun(ctx context.Context, args []string, doPerf, doChecks bool) error {
 			// whether it has failover or a cache is meaningless.
 			bundle.Checks = append(bundle.Checks, harness.RunCorrectness(ctx, suite, t, ctrl, logf)...)
 		}
+
+		// Persist after every target. A full suite runs for the better part of
+		// an hour, and losing all of it because one container died in the last
+		// five minutes is a reproducibility failure of exactly the kind this
+		// harness is supposed to be strict about.
+		if err := writePartial(*outDir, bundle); err != nil {
+			logf("  warning: could not write partial results: %v", err)
+		}
 	}
 
 	if *matrixPath != "" {
@@ -243,6 +251,27 @@ func cmdReport(args []string) error {
 	}
 	fmt.Printf("wrote %s\n", *out)
 	return nil
+}
+
+// writePartial saves the run so far, atomically, so a crash leaves a readable
+// bundle naming the targets that did complete rather than nothing at all.
+func writePartial(outDir string, b *report.Bundle) error {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(b, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(outDir, ".partial.json.tmp")
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	// Rename is atomic, so a reader never sees a half-written file.
+	if err := os.Rename(tmp, filepath.Join(outDir, "partial.json")); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outDir, "partial.md"), []byte(report.Markdown(b)), 0o644)
 }
 
 func filterTargets(all []harness.Target, only string) []harness.Target {

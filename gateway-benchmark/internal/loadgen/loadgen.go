@@ -46,8 +46,14 @@ type Result struct {
 	// token-accounting scenario compares against the upstream's ground truth.
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
-	// Truncated marks a stream that ended without a terminator.
+	// Truncated marks a stream that ended with neither a [DONE] sentinel nor a
+	// finish_reason: the response really was cut short.
 	Truncated bool `json:"truncated"`
+	// NoSentinel marks a stream that completed (finish_reason arrived) but never
+	// sent the [DONE] terminator. That is a protocol deviation, not lost data,
+	// and conflating the two would accuse a gateway of dropping responses it
+	// delivered in full.
+	NoSentinel bool `json:"no_sentinel"`
 }
 
 // Config describes one load phase.
@@ -260,6 +266,14 @@ func doRequest(ctx context.Context, cfg Config, body []byte, scheduled time.Time
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("X-Bench-Seq", fmt.Sprint(idx))
+	// A unique correlation id per request. This is a standard tracing header
+	// that gateways which do not use it simply ignore, and it keeps a
+	// *policy* limit from being measured as *latency*: a gateway whose rate
+	// limiter is keyed on correlation id collapses to one shared bucket when
+	// the header is absent, so the perf phases would measure its default quota
+	// rather than its proxy overhead. The rate-limit scenario (C5) deliberately
+	// omits this header so the limit is still exercised and reported.
+	req.Header.Set("X-Correlation-Id", fmt.Sprintf("gwbench-%d-%d", scheduled.UnixNano(), idx))
 	if cfg.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
@@ -302,6 +316,7 @@ func readStream(body io.Reader, sent, scheduled time.Time, res *Result) {
 
 	var lastChunk time.Time
 	sawDone := false
+	sawFinish := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -320,6 +335,7 @@ func readStream(body io.Reader, sent, scheduled time.Time, res *Result) {
 				Delta struct {
 					Content string `json:"content"`
 				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *struct {
 				PromptTokens     int `json:"prompt_tokens"`
@@ -332,6 +348,9 @@ func readStream(body io.Reader, sent, scheduled time.Time, res *Result) {
 		if frame.Usage != nil {
 			res.PromptTokens = frame.Usage.PromptTokens
 			res.CompletionTokens = frame.Usage.CompletionTokens
+		}
+		if len(frame.Choices) > 0 && frame.Choices[0].FinishReason != nil && *frame.Choices[0].FinishReason != "" {
+			sawFinish = true
 		}
 		if len(frame.Choices) == 0 || frame.Choices[0].Delta.Content == "" {
 			continue
@@ -350,7 +369,9 @@ func readStream(body io.Reader, sent, scheduled time.Time, res *Result) {
 	if err := scanner.Err(); err != nil && res.Err == "" {
 		res.Err = err.Error()
 	}
-	res.Truncated = !sawDone && res.Err == ""
+	// A stream is only truncated if it carried neither terminator.
+	res.NoSentinel = !sawDone && sawFinish && res.Err == ""
+	res.Truncated = !sawDone && !sawFinish && res.Err == ""
 	res.Latency = time.Since(scheduled)
 	_ = sent
 }

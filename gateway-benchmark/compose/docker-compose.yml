@@ -48,28 +48,38 @@ services:
   # (internal/api/api.go:571).
   # ---------------------------------------------------------------------------
   everstack:
-    # Everstack's image is in a private registry, so there is no tag that would
-    # work for someone who just cloned this repo. Set EVERSTACK_IMAGE to an
-    # image you can pull or one you built locally. See the README.
-    #
-    # This is a placeholder default rather than `${EVERSTACK_IMAGE:?...}` on
-    # purpose: Compose interpolates the whole file before it applies profiles,
-    # so a required-variable marker here makes `docker compose up` fail even
-    # when the subject profile is not selected. That would break the one case
-    # the profile exists to protect, a fresh clone with no credentials.
-    image: ${EVERSTACK_IMAGE:-everstack-image-not-set-see-readme}
+    # Built from the public release binary rather than pulled from the private
+    # container registry, so the subject under test is reproducible by anyone.
+    # Override EVERSTACK_IMAGE to benchmark a specific prebuilt image instead.
+    image: ${EVERSTACK_IMAGE:-gwbench-everstack:v0.1.25}
+    build:
+      context: ./everstack
+      dockerfile: Dockerfile
+      args:
+        EVERSTACK_VERSION: ${EVERSTACK_VERSION:-v0.1.25}
     container_name: gwbench-everstack
     # Behind a profile so `docker compose up` brings up the mock upstream and
     # every public competitor without needing credentials at all. The subject is
     # opt-in: `docker compose --profile subject up -d`.
     profiles: ["subject"]
+    # Health conditions, not bare depends_on: the server exits immediately if
+    # ClickHouse or Postgres is not yet accepting connections, and plain
+    # depends_on only waits for the container to be created.
     depends_on:
-      - upstream
-      - everstack-db
-      - everstack-redis
+      upstream:
+        condition: service_started
+      everstack-db:
+        condition: service_healthy
+      everstack-redis:
+        condition: service_started
+      everstack-clickhouse:
+        condition: service_healthy
+      everstack-otel:
+        condition: service_started
+    restart: on-failure:3
     ports:
       - "8080:8080"
-    command: ["serve", "--config", "/etc/everstack/gateway.yaml"]
+    command: ["serve", "--config", "/etc/everstack/gateway.yaml", "--port", "8080"]
     volumes:
       - ./everstack/gateway.yaml:/etc/everstack/gateway.yaml:ro
     environment:
@@ -77,6 +87,7 @@ services:
       - EVS_POSTGRES_DSN=postgres://postgres:postgres@everstack-db:5432/everstack?sslmode=disable
       - EVS_CACHE_TYPE=redis
       - EVS_CACHE_REDIS_ADDRESS=everstack-redis:6379
+      - EVS_CLICKHOUSE_DSN=clickhouse://default:clickhouse@everstack-clickhouse:9000/everstack
       - EVS_API_KEY_HASH_SECRET=${EVS_API_KEY_HASH_SECRET:-bench-only-not-a-production-secret}
       # The upstream ignores the key's value; it only records a fingerprint so
       # the tenant-isolation scenario can tell two callers apart.
@@ -86,6 +97,7 @@ services:
   everstack-db:
     profiles: ["subject"]
     image: postgres:16-alpine
+    mem_limit: 1g
     container_name: gwbench-everstack-db
     environment:
       - POSTGRES_PASSWORD=postgres
@@ -98,6 +110,52 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 3s
       retries: 10
+
+  # ClickHouse backs Everstack's trace and log storage. It is included rather
+  # than switched off because disabling it would remove the observability write
+  # path from the request, making the subject look faster by doing less work
+  # than its own recommended configuration. Benchmarking ourselves in a stripped
+  # mode nobody runs in production would be the self-flattering choice.
+  everstack-clickhouse:
+    profiles: ["subject"]
+    image: clickhouse/clickhouse-server:25.8-alpine
+    container_name: gwbench-everstack-clickhouse
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    # Bounds the subject's *dependency*, not the gateway container being
+    # measured, so this does not advantage or handicap anything in the latency
+    # tables.
+    #
+    # 4g with an internal ceiling below it, not a bare 2g cap. Under full trace
+    # sampling at benchmark load ClickHouse exceeded 2g and was OOM-killed
+    # (exit 137) mid-run; the gateway's trace writes then blocked and its p50
+    # latency reached 11 SECONDS. That is a dead dependency being measured as
+    # proxy overhead. max_server_memory_usage makes ClickHouse shed load
+    # internally instead of being killed by the kernel.
+    mem_limit: 4g
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+      - CLICKHOUSE_DB=everstack
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_MAX_SERVER_MEMORY_USAGE=3000000000
+    tmpfs:
+      - /var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --password clickhouse -q 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  everstack-otel:
+    profiles: ["subject"]
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: gwbench-everstack-otel
+    command: ["--config=/etc/otel/collector.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otel/collector.yaml:ro
+    mem_limit: 512m
 
   everstack-redis:
     profiles: ["subject"]
